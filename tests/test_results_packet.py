@@ -5,13 +5,13 @@ from robustness_benchmark.cli.results_packet import (
     DATASETS,
     FAMILY_ORDER,
     METHOD_ORDER,
-    bootstrap_seed_intervals,
     plot_paper_family_heatmaps,
     plot_paper_tradeoff,
+    seed_summary,
 )
 
 
-def test_bootstrap_intervals_preserve_an_undefined_metric():
+def test_seed_summary_preserves_an_undefined_metric():
     seeds = pd.DataFrame(
         {
             "dataset": ["heloc"] * 5,
@@ -27,13 +27,12 @@ def test_bootstrap_intervals_preserve_an_undefined_metric():
         }
     )
 
-    intervals = bootstrap_seed_intervals(seeds)
+    intervals = seed_summary(seeds)
 
     survival = intervals[intervals["metric"].eq("pooled_conditional_survival")].iloc[0]
     assert survival["seeds_n"] == 0
     assert np.isnan(survival["estimate"])
-    assert np.isnan(survival["ci_lower"])
-    assert np.isnan(survival["ci_upper"])
+    assert np.isnan(survival["seed_sd"])
 
 
 def test_paper_heatmap_handles_undefined_empirical_robustness(tmp_path):

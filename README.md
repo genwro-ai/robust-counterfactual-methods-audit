@@ -172,8 +172,8 @@ This writes `overall_metrics.csv`, `change_family_metrics.csv`,
   each divided by the feature's training median absolute deviation (standard
   deviation when the MAD is zero).
 
-Confidence intervals resample the five base models as clusters (10,000
-bootstrap replicates of the seed-level estimates).
+Each metric is also computed per base model; the results packet reports the
+mean and standard deviation over the five base models (`seed_summary.csv`).
 
 ## Datasets
 

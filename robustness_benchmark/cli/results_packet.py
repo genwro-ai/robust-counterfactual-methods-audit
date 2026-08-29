@@ -83,8 +83,6 @@ FAMILY_LABELS = {
     "bounded_parameter": "Parameter perturb.",
 }
 RESULT_ROOTS = ("full_{dataset}",)
-BOOTSTRAP_REPLICATES = 10_000
-BOOTSTRAP_SEED = 2026
 
 
 def parse_args() -> argparse.Namespace:
@@ -332,7 +330,9 @@ def seed_metrics(artifacts: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def bootstrap_seed_intervals(seeds: pd.DataFrame) -> pd.DataFrame:
+def seed_summary(seeds: pd.DataFrame) -> pd.DataFrame:
+    """Mean and standard deviation of each metric over the base-model seeds."""
+
     metrics = (
         "generation_coverage",
         "validity_given_generated",
@@ -343,37 +343,13 @@ def bootstrap_seed_intervals(seeds: pd.DataFrame) -> pd.DataFrame:
         "mean_l1_robust_scale",
     )
     rows = []
-    for dataset_index, (dataset, dataset_group) in enumerate(
-        seeds.groupby("dataset", sort=True)
-    ):
+    for dataset, dataset_group in seeds.groupby("dataset", sort=True):
         seed_order = sorted(dataset_group["seed"].unique())
         for method, group in dataset_group.groupby("method", sort=True):
             aligned = group.set_index("seed").loc[seed_order]
             for metric in metrics:
                 values = aligned[metric].to_numpy(dtype=float)
                 values = values[np.isfinite(values)]
-                if not len(values):
-                    rows.append(
-                        {
-                            "dataset": dataset,
-                            "method": method,
-                            "metric": metric,
-                            "seeds_n": 0,
-                            "total_seeds_n": len(seed_order),
-                            "estimate": np.nan,
-                            "ci_lower": np.nan,
-                            "ci_upper": np.nan,
-                            "bootstrap_replicates": BOOTSTRAP_REPLICATES,
-                        }
-                    )
-                    continue
-                rng = np.random.default_rng(BOOTSTRAP_SEED + dataset_index)
-                indices = rng.integers(
-                    0,
-                    len(values),
-                    size=(BOOTSTRAP_REPLICATES, len(values)),
-                )
-                estimates = values[indices].mean(axis=1)
                 rows.append(
                     {
                         "dataset": dataset,
@@ -381,10 +357,10 @@ def bootstrap_seed_intervals(seeds: pd.DataFrame) -> pd.DataFrame:
                         "metric": metric,
                         "seeds_n": len(values),
                         "total_seeds_n": len(seed_order),
-                        "estimate": float(values.mean()),
-                        "ci_lower": float(np.quantile(estimates, 0.025)),
-                        "ci_upper": float(np.quantile(estimates, 0.975)),
-                        "bootstrap_replicates": BOOTSTRAP_REPLICATES,
+                        "estimate": float(values.mean()) if len(values) else np.nan,
+                        "seed_sd": (
+                            float(values.std(ddof=1)) if len(values) > 1 else np.nan
+                        ),
                     }
                 )
     return pd.DataFrame(rows)
@@ -418,7 +394,7 @@ def save_tables(
     overall[columns].to_csv(output / "overall_metrics.csv", index=False)
     family.to_csv(output / "change_family_metrics.csv", index=False)
     seeds.to_csv(output / "seed_metrics.csv", index=False)
-    intervals.to_csv(output / "seed_bootstrap_intervals.csv", index=False)
+    intervals.to_csv(output / "seed_summary.csv", index=False)
 
     display = overall[
         [
@@ -935,7 +911,7 @@ Counterfactual explanations promise actionable advice, but the model that produc
 - Eight change families with 25 variants per family and base model: 4,000 changed evaluation models.
 - Eight methods represented by nine configurations.
 - Empirical robustness is reported with coverage, base validity, and proximity.
-- Seed-wise results and 95% cluster-bootstrap intervals use five independent base-model seeds.
+- Seed-wise means and standard deviations use five independent base-model seeds.
 
 ## Main results
 
@@ -977,7 +953,7 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     overall, family = load_results(args.artifacts)
     seeds = seed_metrics(args.artifacts)
-    intervals = bootstrap_seed_intervals(seeds)
+    intervals = seed_summary(seeds)
     runtime = runtime_metrics(args.artifacts)
     save_tables(args.output, overall, family, seeds, intervals)
     save_runtime_table(args.output, runtime)
