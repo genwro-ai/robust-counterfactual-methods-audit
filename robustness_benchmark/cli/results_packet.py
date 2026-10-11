@@ -114,6 +114,10 @@ QUALITY_SUMMARY_COLUMNS = (
 TABLE_COLUMNS = {
     "generation_coverage": ("Coverage", "{:.1%}"),
     "validity_given_generated": ("Base validity", "{:.1%}"),
+    "validity_before_projection_given_generated": (
+        "Base validity before snapping",
+        "{:.1%}",
+    ),
     "pooled_conditional_survival": ("Conditional survival", "{:.1%}"),
     "end_to_end_changed_validity": ("End-to-end changed validity", "{:.1%}"),
     "changed_validity_given_base_valid": ("Empirical robustness", "{:.1%}"),
@@ -405,6 +409,9 @@ def seed_metrics(runs: list[tuple[str, str, Path]]) -> pd.DataFrame:
                         if generated.any()
                         else None
                     ),
+                    "validity_before_projection_given_generated": generation_metrics(
+                        generation
+                    )["validity_before_projection_given_generated"],
                     "certified_coverage": (
                         float(generation["method_certified"].eq(True).mean())
                         if certification_reported
@@ -445,6 +452,7 @@ def seed_summary(seeds: pd.DataFrame) -> pd.DataFrame:
     metrics = (
         "generation_coverage",
         "validity_given_generated",
+        "validity_before_projection_given_generated",
         "end_to_end_validity",
         "pooled_conditional_survival",
         "end_to_end_changed_validity",
@@ -503,6 +511,7 @@ def save_tables(
         "generated_n",
         "generation_coverage",
         "validity_given_generated",
+        "validity_before_projection_given_generated",
         "certified_n",
         "certified_coverage",
         "end_to_end_validity",

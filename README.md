@@ -237,12 +237,19 @@ uv run python -m robustness_benchmark.cli.results_packet \
 
 This writes `overall_metrics.csv`, `change_family_metrics.csv`,
 `seed_metrics.csv`, `seed_summary.csv` (all with a `model_type` column),
-`method_availability.md` (which methods ran on which model class), the paper
-figures per model class (`paper_robustness_by_change_family_<model_type>.pdf`,
-`paper_robustness_proximity_tradeoff_<model_type>.pdf`), and
-`results_brief.md`. Methods a model class cannot serve appear as n/a; the
-confidence-margin baselines are drawn as one dashed curve in the trade-off
-plots.
+`method_availability.md` (which methods ran on which model class), the figures
+per model class (`paper_robustness_by_change_family_<model_type>`,
+`paper_robustness_proximity_tradeoff_<model_type>`,
+`paper_metric_decomposition_<model_type>`, each as PDF and 300 dpi PNG), and
+`results_brief.md`.
+
+All figures share one style (`robustness_benchmark/evaluation/figure_style.py`):
+- each method keeps the same colour and marker in every figure;
+- non-robust baselines are grey, and variants of one method share a hue;
+- robustness heatmaps use a single light-to-dark blue scale.
+
+Methods a model class cannot serve appear as n/a, and the confidence-margin
+baselines are drawn as one grey dashed curve in the trade-off plots.
 
 The packet also writes:
 - `cross_class_summary.md/csv`: mean empirical robustness, end-to-end
@@ -267,7 +274,10 @@ The packet also writes:
 - **Coverage**: fraction of requests for which a method returns a finite
   candidate different from the factual.
 - **Base validity**: fraction of returned candidates that the base model
-  classifies in the target class.
+  classifies in the target class. Candidates are first projected to a valid
+  encoding. Validity before that projection is reported too
+  (`validity_before_projection_given_generated`), because the original RBR
+  and ROAR code scores the raw optimizer output.
 - **Empirical robustness**: among base-valid CFEs, the fraction still
   classified in the target class by a changed model, averaged over the 25
   variants of a family (or all 200).
