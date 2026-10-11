@@ -1,4 +1,4 @@
-"""APDeltaS (Marzari et al., 2024) robust-CFE generation, Algorithm 2.
+"""APΔS (Marzari et al., 2024) robust-CFE generation, Algorithm 2.
 
 Aligned with the authors' code (github.com/lmarza/APAS, exp_sec7):
 - n = int(log(1 - alpha) / log(R)) parameter samples, 1,378 at the paper's
@@ -55,7 +55,7 @@ def _reset_default_solver_limit() -> None:
 
 
 class APASAdapter:
-    """Generate CEs with APDeltaS search and an independent final certificate.
+    """Generate CEs with APΔS search and an independent final certificate.
 
     This implements the paper's robust-CFE generation pattern in Algorithm 2
     at a fixed, externally calibrated parameter radius. It starts with a
@@ -83,9 +83,9 @@ class APASAdapter:
         if delta <= 0:
             raise ValueError("delta must be positive")
         if not 0 < confidence < 1 or not 0 < robustness_probability < 1:
-            raise ValueError("APDeltaS confidence and probability must be in (0, 1)")
+            raise ValueError("APΔS confidence and probability must be in (0, 1)")
         if increment <= 0 or maximum_margin < initial_margin:
-            raise ValueError("invalid APDeltaS margin schedule")
+            raise ValueError("invalid APΔS margin schedule")
         if wall_time_seconds <= 0:
             raise ValueError("wall_time_seconds must be positive")
 
@@ -214,7 +214,7 @@ class APASAdapter:
         self, factual: pd.Series, *, neg_value: int = 0, **_kwargs: object
     ) -> pd.DataFrame:
         if neg_value != 0:
-            raise ValueError("The APDeltaS adapter currently supports target class 1")
+            raise ValueError("The APΔS adapter currently supports target class 1")
         desired_output = 1
         instance_index = self._instance_index
         self._instance_index += 1

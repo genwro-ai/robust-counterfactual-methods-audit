@@ -1,6 +1,6 @@
 """MILP encoding of an (interval-abstracted) ReLU network for Gurobi.
 
-With free inputs (MCE inside AP-Delta-S), the FeatureSchema is encoded exactly:
+With free inputs (MCE inside APΔS), the FeatureSchema is encoded exactly:
 immutable inputs are fixed to the instance, each mutable one-hot group is a
 set of binary variables summing to 1, and each integer feature is an integer
 variable in raw units linked to its standardized input. Fixed inputs (RNCE's
