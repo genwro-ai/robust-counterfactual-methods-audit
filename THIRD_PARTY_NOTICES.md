@@ -67,3 +67,60 @@ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
 CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
+
+## Datasets with categorical features
+
+The following files in `data/` were downloaded from the UCI Machine Learning
+Repository on 2026-10-11 and are redistributed under the Creative Commons
+Attribution 4.0 International licence (CC BY 4.0,
+<https://creativecommons.org/licenses/by/4.0/>). They were converted to CSV
+without changing any value; all cleaning, recoding and subsampling happens in
+`robustness_benchmark/core/data.py`.
+
+### South German Credit (`data/german_credit.csv`)
+
+South German Credit [Dataset] (2019). UCI Machine Learning Repository.
+<https://doi.org/10.24432/C5X89F>. Documented in Grömping, U. (2019), South
+German Credit Data: Correcting a Widely Used Data Set, Report 4/2019, Beuth
+University of Applied Sciences Berlin. Source archive:
+<https://archive.ics.uci.edu/static/public/522/south+german+credit.zip>
+(`SouthGermanCredit.asc`, SHA-256
+`5f363343f356ca38a0236baab849e472846399b2176ccc5bd686483dd8a7562f`). Written as
+CSV with the English column names of the archive's `read_SouthGermanCredit.R`.
+
+SHA-256 `a4e28e9ca9e250ca619b052f73bf63c1f4ab9c8e883a2b944f68251ed55a02f3`
+
+### Statlog German Credit (`data/german_statlog.data`)
+
+Hofmann, H. (1994). Statlog (German Credit Data) [Dataset]. UCI Machine
+Learning Repository. <https://doi.org/10.24432/C5NC77>. Source archive:
+<https://archive.ics.uci.edu/static/public/144/statlog+german+credit+data.zip>
+(`german.data`, stored unchanged). Used only by
+`robustness_benchmark/cli/german_correction_diff.py`.
+
+SHA-256 `b21f3d81db8071257d5ff1deaeba1fd4303b62712e6fcc9715c7a86202cb5871`
+
+### Adult (`data/adult.csv`)
+
+Becker, B. and Kohavi, R. (1996). Adult [Dataset]. UCI Machine Learning
+Repository. <https://doi.org/10.24432/C5XW20>. Source archive:
+<https://archive.ics.uci.edu/static/public/2/adult.zip> (`adult.data`, SHA-256
+`5b00264637dbfec36bdeaab5676b0b309ff9eb788d63554ca0a249491c86603d`;
+`adult.test`, SHA-256
+`a2a9044bc167a35b2361efbabec64e89d69ce82d9790d2980119aac5fd7e9c05`). The two
+files are concatenated (48,842 rows; the comment line of `adult.test` skipped)
+with the column names of `adult.names` and leading spaces stripped.
+
+SHA-256 `f7acee69ac6292d98dd6d2a3a87bf2f5496c850ca5414c565be3adcbb702d10b`
+
+### Default of Credit Card Clients (`data/taiwan_default.csv`)
+
+Yeh, I.-C. (2009). Default of Credit Card Clients [Dataset]. UCI Machine
+Learning Repository. <https://doi.org/10.24432/C55S3H>. Source archive:
+<https://archive.ics.uci.edu/static/public/350/default+of+credit+card+clients.zip>
+(`default of credit card clients.xls`, SHA-256
+`30c6be3abd8dcfd3e6096c828bad8c2f011238620f5369220bd60cfc82700933`). The sheet
+is written as CSV with its second header row (`ID`, `LIMIT_BAL`, ...,
+`default payment next month`) as column names.
+
+SHA-256 `4edce6da569b2c30788a85fd98a9bafb1a983e8ca1a7aac875dd7ff853cbd0bb`
