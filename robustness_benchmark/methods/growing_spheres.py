@@ -1,13 +1,15 @@
 """Growing spheres (Laugel et al., 2018) as used by BetaRCE and RobX.
 
-With a constrained FeatureSchema the sphere covers the mutable numeric columns
-only, immutable columns keep the instance's values, and each mutable
+Benchmark extension, not CARLA's or Laugel's: Laugel et al. treat every
+feature as continuous, and CARLA's ``growing_spheres_search`` draws each
+binary column Bernoulli(0.5) in every candidate (gs_counterfactuals.py:114).
+Here, with a constrained FeatureSchema the sphere covers the mutable numeric
+columns only, immutable columns keep the instance's values, and each mutable
 categorical feature is redrawn as a whole one-hot group
 (``resample_categories``). A category change counts toward the candidate's
 sampled radius, so its numeric step shrinks to make room and a candidate may
 change categories alone. Candidates are projected (integer rounding) before
-they are scored. This extends the
-continuous-only original to mixed data.
+they are scored.
 """
 
 from collections.abc import Callable
