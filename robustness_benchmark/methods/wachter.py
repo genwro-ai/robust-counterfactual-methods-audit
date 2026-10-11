@@ -136,7 +136,11 @@ class Wachter(CEGenerator):
             # break conditions
             if project is not None:
                 projected = valid_projection(
-                    self.task.model, project, wac.detach().numpy(), 1 - neg_value
+                    self.task.model,
+                    project,
+                    wac.detach().numpy(),
+                    1 - neg_value,
+                    margin=epsilon,
                 )
                 wac_valid = projected is not None
             else:

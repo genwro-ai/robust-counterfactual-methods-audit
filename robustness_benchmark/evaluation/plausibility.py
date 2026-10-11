@@ -67,7 +67,8 @@ class PlausibilityReference:
     """Sparsity and data-support metrics against a base model's target region.
 
     Built once per base model because the target-class set, scales and neighbour
-    indices are shared by every method's counterfactuals.
+    indices are shared by every method's counterfactuals. kNN distance, LOF and
+    yNN all use the mixed distance: Manhattan distance on scaled inputs.
     """
 
     def __init__(
@@ -88,7 +89,9 @@ class PlausibilityReference:
         self.train_is_target = (probability >= 0.5) == bool(target_class)
         self.target = train[self.train_is_target]
 
-        self.all_neighbors = NearestNeighbors(n_neighbors=min(k, len(train))).fit(train)
+        self.all_neighbors = NearestNeighbors(
+            n_neighbors=min(k, len(train)), metric="manhattan"
+        ).fit(train / self.scale)
         n_target = len(self.target)
         self.target_neighbors = None
         self.lof = None
@@ -100,8 +103,10 @@ class PlausibilityReference:
                 scaled_target
             )
             self.lof = LocalOutlierFactor(
-                n_neighbors=max(1, min(lof_neighbors, n_target - 1)), novelty=True
-            ).fit(self.target)
+                n_neighbors=max(1, min(lof_neighbors, n_target - 1)),
+                metric="manhattan",
+                novelty=True,
+            ).fit(scaled_target)
             # One extra neighbour drops each point's match with itself.
             distances, _ = self.target_neighbors.kneighbors(
                 scaled_target, n_neighbors=self.k_target + 1
@@ -126,24 +131,25 @@ class PlausibilityReference:
             return rows
         x = factuals.to_numpy(dtype=float)[valid]
         cf = counterfactuals.to_numpy(dtype=float)[valid]
+        scaled_cf = cf / self.scale
 
         n_changed = self.distance.n_changed(cf, x)
         results: dict[str, np.ndarray] = {
             "n_changed_features": n_changed.astype(float),
             "fraction_changed_features": n_changed / self.distance.n_features,
             "ynn": self.train_is_target[
-                self.all_neighbors.kneighbors(cf, return_distance=False)
+                self.all_neighbors.kneighbors(scaled_cf, return_distance=False)
             ].mean(axis=1),
         }
         if self.target_neighbors is not None:
             distances, _ = self.target_neighbors.kneighbors(
-                cf / self.scale, n_neighbors=self.k_target
+                scaled_cf, n_neighbors=self.k_target
             )
             knn = distances.mean(axis=1) / self.distance.n_features
             results["knn_distance"] = knn
             results["knn_distance_relative"] = knn / self.typical_knn_distance
-            results["lof_inlier"] = self.lof.predict(cf) == 1
-            results["lof_score"] = -self.lof.score_samples(cf)
+            results["lof_inlier"] = self.lof.predict(scaled_cf) == 1
+            results["lof_score"] = -self.lof.score_samples(scaled_cf)
         for position, row_index in enumerate(np.flatnonzero(valid)):
             for column, values in results.items():
                 value = values[position]

@@ -109,15 +109,16 @@ def test_apas_locked_config_requires_per_seed_calibration():
     assert "delta" not in LOCKED_CONFIGS["apas"]
 
 
-def test_tuning_protocol_can_be_reused_across_benchmark_versions():
+def test_tuning_is_reused_across_benchmark_versions_for_the_same_bank_only():
     tuning = {
         "benchmark_protocol_version": "full_benchmark_v6_validity_tuning",
         "tuning_protocol_version": "validation_v2_separate_validity_roar_paper",
-        "report": {"protocol": {"base_seed": 2026}},
+        "report": {"protocol": {"base_seed": 2026, "bank_fingerprint": "bank-a"}},
     }
 
-    assert tuning_protocol_is_reusable(tuning, 2026)
-    assert not tuning_protocol_is_reusable(tuning, 2029)
+    assert tuning_protocol_is_reusable(tuning, 2026, "bank-a")
+    assert not tuning_protocol_is_reusable(tuning, 2029, "bank-a")
+    assert not tuning_protocol_is_reusable(tuning, 2026, "bank-b")
 
 
 def test_frozen_tuning_reuses_grids_but_refreshes_fixed_configs(tmp_path):

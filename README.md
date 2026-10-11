@@ -105,8 +105,10 @@ advance: the grid setting with the lowest mean validation log-loss over three
 development seeds (`base_config_selection.json`). The grids are C ∈ {0.001,
 …, 100} for logistic regression, and `max_depth` ∈ {3, 4, 6} × learning rate ∈
 {0.03, 0.1} × `n_estimators` ∈ {100, 200, 400} × `min_child_weight` ∈ {1, 5}
-for XGBoost (row and column subsampling 0.8). Families adapt to the model
-class:
+for XGBoost (row and column subsampling 0.8). Logistic regression has a
+single optimum, so its five base models are identical; for it, variation across
+seeds comes only from factual sampling and change-bank construction. Families
+adapt to the model class:
 
 | Family | Logistic regression | XGBoost |
 |---|---|---|
@@ -193,8 +195,11 @@ not run on XGBoost; ROAR needs a linear model.
 (`core/schema.py`) reaches every method through `task.schema`. A
 counterfactual changes mutable features only:
 - Gradient methods zero the gradients of immutable features.
-- Sampling methods (growing spheres, BetaRCE, RobX) never perturb them and
-  redraw categories as whole one-hot groups.
+- Growing spheres and BetaRCE never perturb them and redraw categories as
+  whole one-hot groups. A category change counts toward the sphere's radius.
+- RobX follows its original code and treats every encoded column as
+  continuous; it starts from the shared growing spheres, and only the final
+  projection makes its output valid.
 - KD-tree and RNCE give each candidate training point the factual's immutable
   values and keep it only if it is still accepted (KD-tree) or still certified
   (RNCE).

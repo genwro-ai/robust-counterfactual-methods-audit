@@ -7,7 +7,8 @@ they only probe the black box and are never returned.
 
 Deviation on constrained schemas: the optimizer stops only once the loss has
 converged and the projected iterate is valid under the worst-case shift, and
-returns that projected point.
+returns that projected point. If no projected iterate qualifies, it runs the
+full iteration budget and returns the last relaxed iterate, as on numeric data.
 """
 
 from collections.abc import Callable, Sequence

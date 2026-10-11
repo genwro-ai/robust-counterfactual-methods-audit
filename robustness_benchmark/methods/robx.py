@@ -1,22 +1,22 @@
 """RobX (Dutta et al., ICML 2022) on top of growing spheres.
 
-With a constrained FeatureSchema, the start counterfactual comes from
-schema-aware growing spheres and each interpolated iterate is projected (taking
-the factual's immutable values) before its stability is tested, so the
-returned point is the one tested. Stability itself keeps the paper's isotropic Gaussian noise on every
-input column: the noisy points probe the model and are never returned, and tau
-is calibrated with the same estimator.
+Faithful to the paper and the BetaRCE implementation: interpolation and the
+Gaussian stability test treat every encoded column, one-hot and immutable ones
+included, as continuous. Only the start counterfactual comes from the
+benchmark's shared growing spheres, which respects the feature schema; the
+registry projects the returned point before checking validity, like every
+method's. One fix to the reference code: stability is measured for a point's
+own class, so an iterate is accepted only if the model also assigns it the
+counterfactual's class.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from functools import partial
 from typing import Any
 
 import numpy as np
 
 from robustness_benchmark.core.schema import FeatureSchema
-from robustness_benchmark.methods.feature_constraints import is_constrained
 from robustness_benchmark.methods.growing_spheres import growing_spheres_search
 
 
@@ -242,7 +242,6 @@ def robx_algorithm(
     robx_lambda: float = 0.1,
     gamma: float = 0.5,
     rng: np.random.Generator | None = None,
-    project: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     if rng is None:
         rng = np.random.default_rng()
@@ -272,23 +271,25 @@ def robx_algorithm(
     if conservative_cfs is None:
         return None, None
 
+    target_side = predict_class_proba_fn(start_counterfactual.reshape(1, -1))[0] > gamma
     counterfactuals = np.tile(start_counterfactual, (len(conservative_cfs), 1))
     for _ in range(robx_max_iter):
         counterfactuals = (
             robx_lambda * conservative_cfs + (1.0 - robx_lambda) * counterfactuals
         )
-        candidates = counterfactuals if project is None else project(counterfactuals)
         stabilities = _counterfactual_stability_batch(
-            candidates,
+            counterfactuals,
             predict_class_proba_fn,
             variance,
             N,
             gamma,
             rng,
         )
-        stable_mask = stabilities > tau
+        stable_mask = (stabilities > tau) & (
+            (predict_class_proba_fn(counterfactuals) > gamma) == target_side
+        )
         if np.any(stable_mask):
-            return candidates[np.argmax(stable_mask)], conservative_cfs
+            return counterfactuals[np.argmax(stable_mask)], conservative_cfs
 
     return None, None
 
@@ -370,11 +371,6 @@ class RobX:
         def predict_target_proba(X):
             return self._predict_target_proba(X, target_class)
 
-        project = (
-            partial(self.schema.project, factual=start_instance)
-            if is_constrained(self.schema)
-            else None
-        )
         robust_cf, conservative_cfs = robx_algorithm(
             self.X_train,
             predict_target_proba,
@@ -387,7 +383,6 @@ class RobX:
             robx_lambda=robx_lambda,
             gamma=gamma,
             rng=rng,
-            project=project,
         )
 
         status = "ok" if robust_cf is not None else "no_robust_cf"

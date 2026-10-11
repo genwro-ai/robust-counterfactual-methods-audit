@@ -121,11 +121,13 @@ VALID_BEFORE_PROJECTION = {
     "kdtree",
     "rnce",
     "apas",
-    "robx",
     "betarce",
     "growing_spheres",
     "gs_margin_80",
 }
+# Faithful to its original code, RobX treats every encoded column as
+# continuous; only the registry's projection makes its output valid.
+RELAXED_SEARCH = {"robx"}
 
 
 class RecordingGenerator:
@@ -183,9 +185,11 @@ def test_mlp_methods_return_valid_encodings(monkeypatch, mixed_setting, method):
     ):
         if row["generation_status"] in {"success", "base_invalid"}:
             assert_valid(ce.to_numpy(), factual.to_numpy(), schema)
-        if row["base_valid"]:
+        if row["base_valid"] and method not in RELAXED_SEARCH:
             # Validity was judged on the returned point, not on a relaxed one.
             assert row["projection_changed"] is False
+    if method in RELAXED_SEARCH:
+        return
     immutable = schema.immutable_columns()
     for factual, result in raw:
         if result.empty or not np.isfinite(result.to_numpy()).all():

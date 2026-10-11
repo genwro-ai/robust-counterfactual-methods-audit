@@ -190,7 +190,7 @@ def test_select_base_spec_picks_lowest_validation_log_loss():
     selected, rows = select_base_spec(Split(), LogisticSpec(), seeds=(1,))
 
     assert isinstance(selected, LogisticSpec)
-    assert sum(row["selected"] for row in rows) == 1
+    assert sum(row["recommended"] for row in rows) == 1
     best = min(rows, key=lambda row: row["mean_validation_log_loss"])
     assert selected.C == best["model_spec"]["C"]
 

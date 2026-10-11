@@ -199,7 +199,14 @@ def _select_spec(
     recommended, rows = select_base_spec(data, base)
     selected = prespecified or recommended
     pd.DataFrame(
-        [{**row, "model_spec": json.dumps(row["model_spec"])} for row in rows]
+        [
+            {
+                **row,
+                "model_spec": json.dumps(row["model_spec"]),
+                "used": row["model_spec"] == selected.to_dict(),
+            }
+            for row in rows
+        ]
     ).to_parquet(output / "base_config_selection.parquet", index=False)
     write_json(
         output / "base_config_selection.json",

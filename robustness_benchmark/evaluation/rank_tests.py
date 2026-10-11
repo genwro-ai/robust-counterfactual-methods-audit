@@ -40,7 +40,8 @@ class RankTestResult:
     def cliques(self) -> list[tuple[int, int]]:
         """Maximal runs of rank-ordered methods that are not significantly different.
 
-        Each pair is an inclusive index range into ``average_ranks``.
+        A rank difference of at least CD is significant (Demšar 2006). Each pair
+        is an inclusive index range into ``average_ranks``.
         """
 
         ranks = self.average_ranks.to_numpy()
@@ -49,7 +50,7 @@ class RankTestResult:
             end = (
                 int(
                     np.searchsorted(
-                        ranks, ranks[start] + self.critical_difference, "right"
+                        ranks, ranks[start] + self.critical_difference, "left"
                     )
                 )
                 - 1

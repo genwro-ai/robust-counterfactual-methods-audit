@@ -208,7 +208,7 @@ def select_base_spec(
     selected = int(np.argmin(means))
     for row in rows:
         row["mean_validation_log_loss"] = means[int(row["candidate"])]
-        row["selected"] = row["candidate"] == selected
+        row["recommended"] = row["candidate"] == selected
     return candidates[selected], rows
 
 
@@ -477,6 +477,7 @@ def make_changed_models(
             model = spec.incremental_update(
                 base_model, *with_update_rows(rows), data.X_val, data.y_val
             )
+            trees = getattr(model, "num_trees", None)
             changed.append(
                 ChangedModel(
                     f"incremental_update:{level}:r{replicate}:seed{seed}",
@@ -494,6 +495,9 @@ def make_changed_models(
                         "update_fraction": fraction,
                         "sampling_seed": seed,
                         "replicate": replicate,
+                        "added_trees": (
+                            None if trees is None else trees - base_model.num_trees
+                        ),
                     },
                 )
             )

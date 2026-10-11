@@ -1,10 +1,12 @@
 """Growing spheres (Laugel et al., 2018) as used by BetaRCE and RobX.
 
 With a constrained FeatureSchema the sphere covers the mutable numeric columns
-only, immutable columns keep the instance's values, each mutable categorical
-feature is redrawn as a whole one-hot group (``resample_categories``) once the
-sphere's radius reaches the length of a category change, and candidates are
-projected (integer rounding) before they are scored. This extends the
+only, immutable columns keep the instance's values, and each mutable
+categorical feature is redrawn as a whole one-hot group
+(``resample_categories``). A category change counts toward the candidate's
+sampled radius, so its numeric step shrinks to make room and a candidate may
+change categories alone. Candidates are projected (integer rounding) before
+they are scored. This extends the
 continuous-only original to mixed data.
 """
 
@@ -15,6 +17,7 @@ import pandas as pd
 
 from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.methods.feature_constraints import (
+    fit_category_changes_in_radius,
     is_constrained,
     mutable_groups,
     resample_categories,
@@ -86,7 +89,7 @@ def growing_spheres_search(
         candidates = np.repeat(instance, n_search_samples, axis=0)
 
         if continuous_indices.size > 0:
-            cont_samples, _ = hyper_sphere_coordinates(
+            cont_samples, radii = hyper_sphere_coordinates(
                 n_search_samples,
                 instance[:, continuous_indices],
                 high=high,
@@ -95,6 +98,8 @@ def growing_spheres_search(
                 rng=rng,
             )
             candidates[:, continuous_indices] = cont_samples
+        else:
+            radii = rng.random(n_search_samples) * (high - low) + low
 
         if binary_indices:
             candidates[:, binary_indices] = rng.binomial(
@@ -103,10 +108,11 @@ def growing_spheres_search(
                 size=(n_search_samples, len(binary_indices)),
             )
 
-        # A category change moves the one-hot columns by 2 ** (1 / p), so it
-        # enters the search once the sphere is that large.
-        if groups and high >= 2 ** (1 / p_norm):
+        if groups:
             resample_categories(candidates, groups, rng)
+            fit_category_changes_in_radius(
+                candidates, instance, groups, continuous_indices, radii, p_norm
+            )
 
         if feature_min is not None and feature_max is not None:
             candidates = np.clip(candidates, feature_min, feature_max)

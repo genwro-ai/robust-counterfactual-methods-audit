@@ -13,7 +13,10 @@ Deviations, all for comparability with RobX:
 - tau, sigma^2 = 0.01 and N = 1,000 match ``robx_balanced``; tau is the median
   training-target stability, and sigma is in standardized units.
 - R is checked at the current iterate, so a returned point that met tau is the
-  one tested; the reference tests the point before its update.
+  one tested; the reference tests the point before its update. Acceptance is
+  R >= tau as in the reference (RobX uses R > tau).
+- The Wachter base uses the fixed default settings, not the per-dataset tuned
+  Wachter configuration, so T:Rex has no tuned hyperparameters.
 - 200 steps, the largest budget in Appendix D.
 - Immutable columns get zero gradient (the Wachter base also keeps them);
   projection after the search restores one-hot and integer validity.

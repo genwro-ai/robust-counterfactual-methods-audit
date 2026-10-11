@@ -35,12 +35,21 @@ def search_projection(
 
 
 def valid_projection(
-    model, project: Callable[[np.ndarray], np.ndarray], candidate, target: int = 1
+    model,
+    project: Callable[[np.ndarray], np.ndarray],
+    candidate,
+    target: int = 1,
+    margin: float = 0.0,
 ) -> np.ndarray | None:
-    """The projected candidate if ``model`` assigns it ``target``, else None."""
+    """The projected candidate if ``model`` assigns it ``target``, else None.
+
+    ``margin`` requires the target-class probability to clear 0.5 by that much.
+    """
 
     point = project(candidate)
-    return point if model.predict_single(point) == target else None
+    probability = float(model.predict(point).iloc[0, 0])
+    valid = probability - margin >= 0.5 if target == 1 else probability + margin < 0.5
+    return point if valid else None
 
 
 def matches_immutable(rows, factual, schema: FeatureSchema) -> np.ndarray:
@@ -81,3 +90,38 @@ def resample_categories(
         chosen = (current + rng.integers(1, len(group), size=len(rows))) % len(group)
         candidates[np.ix_(rows, group)] = 0.0
         candidates[rows, np.asarray(group)[chosen]] = 1.0
+
+
+def fit_category_changes_in_radius(
+    candidates: np.ndarray,
+    instance: np.ndarray,
+    groups: list[list[int]],
+    numeric: np.ndarray,
+    radii: np.ndarray,
+    p_norm: int,
+) -> None:
+    """Make category changes count toward each candidate's sampled radius.
+
+    A category change moves two one-hot entries by 1, adding 2 to the sum of
+    |change|^p. A row that cannot afford its category changes keeps the
+    factual's categories; a row that can shrinks its numeric step to the rest
+    of its budget, so its total p-norm change equals its radius.
+    """
+
+    reference = instance.reshape(-1)
+    changed = sum(
+        candidates[:, group].argmax(axis=1) != reference[group].argmax()
+        for group in groups
+    )
+    budget = radii**p_norm - 2.0 * changed
+    unaffordable = np.flatnonzero(budget < 0)
+    for group in groups:
+        candidates[np.ix_(unaffordable, group)] = reference[group]
+    shrink = np.flatnonzero((budget >= 0) & (changed > 0))
+    if numeric.size and shrink.size:
+        scale = budget[shrink] ** (1.0 / p_norm) / radii[shrink]
+        rows = np.ix_(shrink, numeric)
+        candidates[rows] = (
+            reference[numeric]
+            + (candidates[rows] - reference[numeric]) * scale[:, None]
+        )

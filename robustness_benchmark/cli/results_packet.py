@@ -473,6 +473,7 @@ def seed_metrics(runs: list[tuple[str, str, Path]]) -> pd.DataFrame:
                         ].mean()
                     ),
                     "mean_runtime_seconds": float(generation["runtime_seconds"].mean()),
+                    **plausibility_summary(generation[generation["base_valid"]]),
                 }
             )
     return pd.DataFrame(rows)
@@ -489,7 +490,9 @@ def seed_summary(seeds: pd.DataFrame) -> pd.DataFrame:
         "end_to_end_changed_validity",
         "changed_validity_given_base_valid",
         "mean_l1_robust_scale",
+        *QUALITY_SUMMARY_COLUMNS,
     )
+    metrics = tuple(metric for metric in metrics if metric in seeds)  # older runs
     rows = []
     for (dataset, model_type), dataset_group in seeds.groupby(
         ["dataset", "model_type"], sort=True

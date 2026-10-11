@@ -54,7 +54,7 @@ from robustness_benchmark.methods.robx import (
     training_target_stability_scores,
 )
 
-BENCHMARK_PROTOCOL_VERSION = "full_benchmark_v9_split_50_10_10_30"
+BENCHMARK_PROTOCOL_VERSION = "full_benchmark_v10_model_classes_categorical"
 TUNING_PROTOCOL_VERSION = "validation_v2_separate_validity_roar_paper"
 ADAPTIVE_ROBX_METHODS = ("robx_balanced", "robx_robust")
 
@@ -164,6 +164,7 @@ def tune_methods(
                 "robust-scale L1; changed models are never consulted"
             ),
             "base_model_id": base_id,
+            "bank_fingerprint": model_bank_fingerprint(bank),
         },
         "methods": {},
     }
@@ -253,8 +254,10 @@ def resolve_robx_seed_configs(
     return resolved
 
 
-def tuning_protocol_is_reusable(tuning: dict[str, object], base_seed: int) -> bool:
-    """Allow tuning reuse across benchmark versions when its protocol is unchanged."""
+def tuning_protocol_is_reusable(
+    tuning: dict[str, object], base_seed: int, bank_fingerprint: str
+) -> bool:
+    """Reuse tuning across benchmark versions only for the same bank and seed."""
 
     report = tuning.get("report", {})
     if not isinstance(report, dict):
@@ -264,6 +267,7 @@ def tuning_protocol_is_reusable(tuning: dict[str, object], base_seed: int) -> bo
         isinstance(protocol, dict)
         and tuning.get("tuning_protocol_version") == TUNING_PROTOCOL_VERSION
         and protocol.get("base_seed") == base_seed
+        and protocol.get("bank_fingerprint") == bank_fingerprint
     )
 
 
@@ -337,13 +341,17 @@ def _generation_ensemble(
         ]
     directory = output / "generation_ensembles" / protocol / f"seed_{base_seed}"
     paths = [directory / f"member_{member:02d}.pt" for member in range(size)]
+    bank_fingerprint = model_bank_fingerprint(bank)
     models = []
     for member, path in enumerate(
         tqdm(paths, desc=f"seed {base_seed} · BetaRCE ensemble", leave=False)
     ):
         if path.is_file():
-            models.append(load_model_checkpoint(path)[0])
-            continue
+            # Cached members are reused only when trained for this bank.
+            model, payload = load_model_checkpoint(path)
+            if payload["metadata"].get("bank_fingerprint") == bank_fingerprint:
+                models.append(model)
+                continue
         model = make_betarce_generation_model(
             data, base_seed=base_seed, member=member, spec=spec
         )
@@ -357,6 +365,7 @@ def _generation_ensemble(
                 "protocol": protocol,
                 "initialization_seed": base_seed,
                 "bootstrap_sampling_seed": base_seed + 100_000 + member,
+                "bank_fingerprint": bank_fingerprint,
             },
         )
         models.append(model)
@@ -693,7 +702,9 @@ def main() -> None:
             )
         if tuning_path.is_file():
             tuning = json.loads(tuning_path.read_text())
-            protocol_reusable = tuning_protocol_is_reusable(tuning, tuning_base_seed)
+            protocol_reusable = tuning_protocol_is_reusable(
+                tuning, tuning_base_seed, bank_fingerprint
+            )
         else:
             tuning = {}
             protocol_reusable = False
