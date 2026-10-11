@@ -121,7 +121,7 @@ TABLE_COLUMNS = {
     "pooled_conditional_survival": ("Conditional survival", "{:.1%}"),
     "end_to_end_changed_validity": ("End-to-end changed validity", "{:.1%}"),
     "changed_validity_given_base_valid": ("Empirical robustness", "{:.1%}"),
-    "mean_l1_robust_scale": ("Scaled L1", "{:.3f}"),
+    "mean_gower_distance": ("Gower distance", "{:.3f}"),
     "mean_runtime_seconds": ("Seconds/CFE", "{:.3f}"),
     "mean_n_changed_features": ("Changed features", "{:.2f}"),
     "mean_knn_distance": ("kNN distance", "{:.3f}"),
@@ -160,9 +160,7 @@ RANK_ANALYSES = (
         True,
         True,
     ),
-    RankAnalysis(
-        "distance", "Scaled L1 distance", "mean_l1_robust_scale", False, False
-    ),
+    RankAnalysis("distance", "Gower distance", "mean_gower_distance", False, False),
 )
 
 
@@ -242,7 +240,7 @@ def load_dataset_results(root: Path, dataset: str) -> tuple[pd.DataFrame, pd.Dat
 def summarize_generation(generation: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for method, group in generation.groupby("method", sort=True):
-        valid_cost = group.loc[group["base_valid"], "l1_robust_scale_mean"]
+        valid_cost = group.loc[group["base_valid"], "gower_distance"]
         certification_reported = group["method_certified"].notna().any()
         certified = (
             group["method_certified"].eq(True) if certification_reported else None
@@ -252,7 +250,7 @@ def summarize_generation(generation: pd.DataFrame) -> pd.DataFrame:
                 "method": str(method),
                 **generation_metrics(group),
                 "mean_runtime_seconds": float(group["runtime_seconds"].mean()),
-                "mean_l1_robust_scale": float(valid_cost.mean()),
+                "mean_gower_distance": float(valid_cost.mean()),
                 "certified_n": int(certified.sum()) if certified is not None else None,
                 "certified_coverage": (
                     float(certified.mean()) if certified is not None else None
@@ -434,9 +432,9 @@ def seed_metrics(runs: list[tuple[str, str, Path]]) -> pd.DataFrame:
                         if survival["base_valid"].any()
                         else None
                     ),
-                    "mean_l1_robust_scale": float(
+                    "mean_gower_distance": float(
                         generation.loc[
-                            generation["base_valid"], "l1_robust_scale_mean"
+                            generation["base_valid"], "gower_distance"
                         ].mean()
                     ),
                     "mean_runtime_seconds": float(generation["runtime_seconds"].mean()),
@@ -457,7 +455,7 @@ def seed_summary(seeds: pd.DataFrame) -> pd.DataFrame:
         "pooled_conditional_survival",
         "end_to_end_changed_validity",
         "changed_validity_given_base_valid",
-        "mean_l1_robust_scale",
+        "mean_gower_distance",
         *QUALITY_SUMMARY_COLUMNS,
     )
     metrics = tuple(metric for metric in metrics if metric in seeds)  # older runs
@@ -518,7 +516,7 @@ def save_tables(
         "pooled_conditional_survival",
         "end_to_end_changed_validity",
         "changed_validity_given_base_valid",
-        "mean_l1_robust_scale",
+        "mean_gower_distance",
         "mean_runtime_seconds",
         "p10_changed_model_conditional_survival",
         "min_changed_model_conditional_survival",
@@ -598,7 +596,7 @@ def method_availability(overall: pd.DataFrame) -> pd.DataFrame:
 CROSS_CLASS_METRICS = {
     "empirical_robustness": "changed_validity_given_base_valid",
     "end_to_end_robustness": "end_to_end_changed_validity",
-    "distance": "mean_l1_robust_scale",
+    "distance": "mean_gower_distance",
 }
 
 
@@ -660,7 +658,7 @@ def cross_class_markdown(summary: pd.DataFrame) -> str:
     ).rename_axis("Method")
     table.index = table.index.map(method_label)
     return (
-        "Cells: empirical robustness / end-to-end robustness / scaled L1, "
+        "Cells: empirical robustness / end-to-end robustness / Gower distance, "
         "averaged over datasets.\n\n" + table.to_markdown() + "\n"
     )
 
@@ -985,7 +983,7 @@ def plot_family_heatmaps(output: Path, family: pd.DataFrame, model_type: str) ->
 
 
 def tradeoff_point(
-    selected: pd.DataFrame, method: str, x_column: str = "mean_l1_robust_scale"
+    selected: pd.DataFrame, method: str, x_column: str = "mean_gower_distance"
 ) -> tuple[float, float] | None:
     x = float(selected.loc[method, x_column])
     y = 100 * float(selected.loc[method, "changed_validity_given_base_valid"])
@@ -997,7 +995,7 @@ FRONTIER_LINE = {"color": AXIS, "linewidth": 1.2}
 
 
 def plot_margin_baseline(
-    axis, selected: pd.DataFrame, x_column: str = "mean_l1_robust_scale"
+    axis, selected: pd.DataFrame, x_column: str = "mean_gower_distance"
 ) -> list[tuple[float, float]]:
     """Draw the confidence-margin baselines as one dashed curve."""
 
@@ -1030,8 +1028,8 @@ def plot_tradeoff(
     overall: pd.DataFrame,
     model_type: str,
     *,
-    x_column: str = "mean_l1_robust_scale",
-    x_label: str = r"Mean scaled $L_1$ distance  $\leftarrow$ closer",
+    x_column: str = "mean_gower_distance",
+    x_label: str = r"Mean Gower distance  $\leftarrow$ closer",
     title: str = "robustness and proximity form dataset-specific frontiers",
     stem: str = "paper_robustness_proximity_tradeoff",
 ) -> None:
@@ -1236,7 +1234,7 @@ def write_brief(
             empirical_robustness=("changed_validity_given_base_valid", "mean"),
             coverage=("generation_coverage", "mean"),
             base_validity=("validity_given_generated", "mean"),
-            distance=("mean_l1_robust_scale", "mean"),
+            distance=("mean_gower_distance", "mean"),
         )
         .sort_values(["model_type", "empirical_robustness"], ascending=[True, False])
     )
@@ -1259,7 +1257,7 @@ def write_brief(
             "coverage": "Mean coverage",
             "base_validity": "Mean base validity",
             "empirical_robustness": "Mean empirical robustness",
-            "distance": "Mean scaled L1",
+            "distance": "Mean Gower distance",
         }
     )
     apas_certification = overall.loc[

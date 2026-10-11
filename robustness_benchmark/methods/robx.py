@@ -13,6 +13,11 @@ returned, as in the paper's Algorithm 1; BetaRCE's ``robx_algorithm`` returns
 the first point to pass. One fix to the reference code: stability is measured
 for a point's own class, so an iterate is accepted only if the model also
 assigns it the counterfactual's class.
+
+The adapter uses k = 3 conservative counterfactuals and 100 iterations
+(Algorithm 1; BetaRCE's ``robx_algorithm`` defaults), and growing spheres with
+100 samples, p = 2, step 0.1 and 100 iterations (``gs`` in BetaRCE's
+configs/config_exp.yaml).
 """
 
 from collections.abc import Callable
@@ -20,9 +25,15 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from robustness_benchmark.core.schema import FeatureSchema
+from robustness_benchmark.methods.base import predict_crisp, predict_proba
 from robustness_benchmark.methods.growing_spheres import growing_spheres_search
+
+ROBX_IMPLEMENTATION = "dutta2022_algorithm1_closest_of_c_k3_v2"
+ROBX_K = 3
+ROBX_MAX_ITER = 100
 
 
 def _counterfactual_stability_batch(
@@ -409,3 +420,60 @@ class RobX:
 
         status = "ok" if robust_cf is not None else "no_robust_cf"
         return RobXResult(robust_cf, start_cf, conservative_cfs, {"status": status})
+
+
+class RobXAdapter:
+    def __init__(
+        self,
+        task,
+        *,
+        seed: int,
+        variance: float = 0.01,
+        tau: float = 0.5,
+        stability_samples: int = 1_000,
+    ) -> None:
+        self.task = task
+        self.seed = seed
+        self.variance = variance
+        self.tau = tau
+        self.stability_samples = stability_samples
+        X_train = task.training_data.X.to_numpy()
+        self.generator = RobX(
+            X_train,
+            lambda values: predict_crisp(task.model, values),
+            lambda values: predict_proba(task.model, values),
+            feature_min=X_train.min(axis=0),
+            feature_max=X_train.max(axis=0),
+            schema=task.schema,
+        )
+        self.last_metadata: dict[str, object] = {}
+
+    def generate_for_instance(
+        self, factual: pd.Series, *, neg_value: int = 0, **_kwargs: object
+    ) -> pd.DataFrame:
+        result = self.generator.generate(
+            factual.to_numpy(),
+            target_class=1 - neg_value,
+            variance=self.variance,
+            tau=self.tau,
+            N=self.stability_samples,
+            k=ROBX_K,
+            robx_max_iter=ROBX_MAX_ITER,
+            robx_lambda=0.1,
+            gs_n_search_samples=100,
+            gs_p_norm=2,
+            gs_step=0.1,
+            gs_max_iter=100,
+            rng=np.random.default_rng(self.seed),
+        )
+        self.last_metadata = {
+            **result.metadata,
+            "variance": self.variance,
+            "tau": self.tau,
+            "stability_samples": self.stability_samples,
+            "robx_implementation": ROBX_IMPLEMENTATION,
+            "robx_k": ROBX_K,
+        }
+        if result.counterfactual is None:
+            return pd.DataFrame(columns=factual.index)
+        return pd.DataFrame([result.counterfactual], columns=factual.index)

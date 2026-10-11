@@ -123,7 +123,7 @@ def test_full_bank_has_25_unique_candidates_per_family(monkeypatch):
 
 
 def test_rnce_calibration_follows_the_authors_incremental_protocol(tmp_path):
-    from robustness_benchmark.methods.apas_calibration import (
+    from robustness_benchmark.methods.calibration import (
         RNCE_UPDATE_CALIBRATION,
         load_or_create_calibration,
     )

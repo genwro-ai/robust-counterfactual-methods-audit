@@ -9,6 +9,7 @@ from robustness_benchmark.core.classifiers import (
     missing_capabilities,
 )
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION
+from robustness_benchmark.methods.betarce import BETARCE_IMPLEMENTATION
 from robustness_benchmark.methods.rbr import RBR_IMPLEMENTATION
 from robustness_benchmark.methods.rnce import (
     RNCE_IMPLEMENTATION,
@@ -19,10 +20,7 @@ from robustness_benchmark.methods.roar_lime import (
     LIME_NUM_SAMPLES,
     ROAR_LIME_IMPLEMENTATION,
 )
-from robustness_benchmark.methods.robust_adapters import (
-    BETARCE_IMPLEMENTATION,
-    ROBX_IMPLEMENTATION,
-)
+from robustness_benchmark.methods.robx import ROBX_IMPLEMENTATION
 from robustness_benchmark.methods.trex import TREX_IMPLEMENTATION
 
 # Growing spheres counts a candidate once P(y=1) reaches the target; the

@@ -24,9 +24,9 @@ import pandas as pd
 from sklearn.neighbors import KDTree
 
 from robustness_benchmark.core.task import ClassificationTask
-from robustness_benchmark.methods.ce_generator import CEGenerator
-from robustness_benchmark.methods.delta_robustness import DeltaRobustnessEvaluator
+from robustness_benchmark.methods.base import CEGenerator
 from robustness_benchmark.methods.feature_constraints import matches_immutable
+from robustness_benchmark.methods.milp.delta_robustness import DeltaRobustnessEvaluator
 
 RNCE_INTERVAL_ENCODING = "sign_aware_first_layer_v2"
 RNCE_IMPLEMENTATION = "jiang2024_algorithm4_l1_line_search_v1"

@@ -36,7 +36,7 @@ from robustness_benchmark.evaluation.plausibility import (
     PlausibilityReference,
     plausibility_summary,
 )
-from robustness_benchmark.methods.apas_calibration import (
+from robustness_benchmark.methods.calibration import (
     RNCE_UPDATE_CALIBRATION,
     apas_method_config,
     apas_update_calibration,
@@ -57,8 +57,8 @@ from robustness_benchmark.methods.robx import (
     training_target_stability_scores,
 )
 
-BENCHMARK_PROTOCOL_VERSION = "full_benchmark_v10_model_classes_categorical"
-TUNING_PROTOCOL_VERSION = "validation_v2_separate_validity_roar_paper"
+BENCHMARK_PROTOCOL_VERSION = "full_benchmark_v11_gower_distance"
+TUNING_PROTOCOL_VERSION = "validation_v3_gower_cost"
 ADAPTIVE_ROBX_METHODS = ("robx_balanced", "robx_robust")
 
 
@@ -112,8 +112,8 @@ def _score_configuration(
     return {
         "config": config,
         "base_validity": float(np.mean(base_valid)),
-        "mean_l1_robust_scale": (
-            float(np.mean([row["l1_robust_scale_mean"] for row in valid_generation]))
+        "mean_gower_distance": (
+            float(np.mean([row["gower_distance"] for row in valid_generation]))
             if valid_generation
             else None
         ),
@@ -131,7 +131,7 @@ def selection_key(candidate: dict[str, object]) -> tuple[float, float]:
     validity = candidate["base_validity"]
     if not isinstance(validity, (int, float)):
         raise TypeError("Tuning base validity must be numeric")
-    cost = candidate["mean_l1_robust_scale"]
+    cost = candidate["mean_gower_distance"]
     numeric_cost = float(cost) if isinstance(cost, (int, float)) else float("inf")
     return (float(validity), -numeric_cost)
 
@@ -164,7 +164,7 @@ def tune_methods(
             "factuals_n": len(factuals),
             "objective": (
                 "maximize base-model validity, then minimize "
-                "robust-scale L1; changed models are never consulted"
+                "Gower distance; changed models are never consulted"
             ),
             "base_model_id": base_id,
             "bank_fingerprint": model_bank_fingerprint(bank),
@@ -605,7 +605,7 @@ def write_summary(
         )
     generation_summary = []
     for method, group in generation.groupby("method", sort=True):
-        valid_cost = group.loc[group["base_valid"], "l1_robust_scale_mean"]
+        valid_cost = group.loc[group["base_valid"], "gower_distance"]
         valid_group = group[group["base_valid"]]
         certification_reported = (
             "method_certified" in group.columns
@@ -619,7 +619,7 @@ def write_summary(
                 "method": method,
                 **generation_metrics(group),
                 "mean_runtime_seconds": float(group["runtime_seconds"].mean()),
-                "mean_l1_robust_scale": (
+                "mean_gower_distance": (
                     float(valid_cost.mean()) if len(valid_cost) else None
                 ),
                 **plausibility_summary(valid_group),

@@ -6,9 +6,9 @@ import torch
 from robustness_benchmark.core.classifiers import LogisticClassifier, TorchBinaryModel
 from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.evaluation.plausibility import (
-    MixedDistance,
+    GowerDistance,
     PlausibilityReference,
-    robust_feature_scale,
+    feature_range,
 )
 from robustness_benchmark.methods import registry
 from robustness_benchmark.methods.kdtree import KDTreeNNCE
@@ -376,14 +376,14 @@ def test_mixed_distance_and_sparsity_on_a_hand_made_example():
         ],
         columns=schema.columns,
     )
-    distance = MixedDistance(X, schema)
-    mad = robust_feature_scale(X)["age"]  # median 2, |x - 2| median 1
+    distance = GowerDistance(X, schema)
+    age_range = feature_range(X)["age"]
     factual = np.array([1.0, 1, 0, 0, 1, 0])
-    # Age moves by two MADs and job changes; sex stays.
-    counterfactual = np.array([1.0 + 2 * mad, 0, 0, 1, 1, 0])
+    # Age moves by half its range and job changes; sex stays.
+    counterfactual = np.array([1.0 + age_range / 2, 0, 0, 1, 1, 0])
 
-    assert mad == 1.0
-    assert distance(factual, counterfactual) == pytest.approx((2.0 + 1.0 + 0.0) / 3)
+    assert age_range == 4.0
+    assert distance(factual, counterfactual) == pytest.approx((0.5 + 1.0 + 0.0) / 3)
     assert distance.n_changed(factual, counterfactual) == 2
 
     class AllTarget:
@@ -399,7 +399,7 @@ def test_mixed_distance_and_sparsity_on_a_hand_made_example():
     assert row["n_changed_features"] == 2
     assert row["fraction_changed_features"] == pytest.approx(2 / 3)
     # Nearest training point is row 2: same job and sex, age 2 versus 3.
-    assert row["knn_distance"] == pytest.approx(1.0 / 3)
+    assert row["knn_distance"] == pytest.approx(0.25 / 3)
 
 
 def test_numeric_data_outputs_match_without_and_with_identity_schema():
@@ -414,7 +414,7 @@ def test_numeric_data_outputs_match_without_and_with_identity_schema():
         columns=tuple(X.columns),
         numeric_scale={name: (0.0, 1.0) for name in X.columns},
     )
-    scale = robust_feature_scale(X.astype(np.float32)).to_numpy()
+    scale = feature_range(X.astype(np.float32)).to_numpy()
 
     methods = ("kdtree", "wachter", "growing_spheres", "robx", "rbr", "trex")
     for method in (*methods, "roar_lime", "roar"):
@@ -439,11 +439,11 @@ def test_numeric_data_outputs_match_without_and_with_identity_schema():
             strict=True,
         ):
             assert row["projection_changed"] is False
-            assert row["l1_robust_scale_mean"] == other["l1_robust_scale_mean"]
+            assert row["gower_distance"] == other["gower_distance"]
             if row["base_valid"]:
-                # The previous definition: mean robust-scaled L1 over columns.
+                # On numeric data Gower is the mean range-scaled L1 over columns.
                 legacy = np.nanmean(np.abs(ce.to_numpy() - factual.to_numpy()) / scale)
-                assert row["l1_robust_scale_mean"] == legacy
+                assert row["gower_distance"] == legacy
 
 
 def test_validity_before_projection_is_recorded(mixed_setting):

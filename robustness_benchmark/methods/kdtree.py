@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from sklearn.neighbors import KDTree
 
-from robustness_benchmark.methods.ce_generator import CEGenerator
+from robustness_benchmark.methods.base import CEGenerator
 
 
 class KDTreeNNCE(CEGenerator):

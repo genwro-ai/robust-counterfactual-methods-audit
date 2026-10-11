@@ -8,9 +8,10 @@ from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.core.task import ClassificationTask, FrameDataset
 from robustness_benchmark.evaluation.plausibility import (
     SPARSITY_TOLERANCE,
-    MixedDistance,
+    GowerDistance,
 )
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION, APASAdapter
+from robustness_benchmark.methods.betarce import BETARCE_IMPLEMENTATION, BetaRCEAdapter
 from robustness_benchmark.methods.configuration import (
     GROWING_SPHERES_TARGETS,
     unsupported_methods,
@@ -25,12 +26,7 @@ from robustness_benchmark.methods.roar_lime import (
     ROAR_LIME_IMPLEMENTATION,
     RoarLimeAdapter,
 )
-from robustness_benchmark.methods.robust_adapters import (
-    BETARCE_IMPLEMENTATION,
-    ROBX_IMPLEMENTATION,
-    BetaRCEAdapter,
-    RobXAdapter,
-)
+from robustness_benchmark.methods.robx import ROBX_IMPLEMENTATION, RobXAdapter
 from robustness_benchmark.methods.trex import TREX_IMPLEMENTATION, TRexAdapter
 from robustness_benchmark.methods.wachter import WACHTER_DEFAULTS, Wachter
 
@@ -268,7 +264,7 @@ def generate_counterfactuals(
         if dataset_row_ids is not None
         else list(resolved_factual_ids)
     )
-    distance = MixedDistance(task.training_data.X, task.schema)
+    distance = GowerDistance(task.training_data.X, task.schema)
 
     factual_iterator = factuals.iterrows()
     if progress_description is not None:
@@ -352,7 +348,7 @@ def generate_counterfactuals(
                 **method_metadata,
                 "l1_scaled_sum": float(np.nansum(difference)) if base_valid else None,
                 "l1_scaled_mean": float(np.nanmean(difference)) if base_valid else None,
-                "l1_robust_scale_mean": (
+                "gower_distance": (
                     float(distance(ce, factual)) if base_valid else None
                 ),
             }

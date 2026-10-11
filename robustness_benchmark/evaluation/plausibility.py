@@ -16,28 +16,27 @@ METRIC_COLUMNS = (
 )
 
 
-def robust_feature_scale(X: pd.DataFrame) -> pd.Series:
-    """Per-feature MAD, falling back to std then 1, so L1 costs are unit-free."""
+def feature_range(X: pd.DataFrame) -> pd.Series:
+    """Per-feature training range, Gower's normaliser; 1 for constant features."""
 
-    mad = (X - X.median(axis=0)).abs().median(axis=0)
-    std = X.std(axis=0, ddof=0)
-    return mad.where(mad > 1e-8, std).where(lambda value: value > 1e-8, 1.0)
+    span = X.max(axis=0) - X.min(axis=0)
+    return span.where(span > 1e-8, 1.0)
 
 
-class MixedDistance:
-    """Gower-style distance: the mean over raw features of a per-feature cost.
+class GowerDistance:
+    """Gower's (1971) distance: the mean over raw features of a per-feature cost.
 
-    A numeric feature costs |delta| / s with s its robust training scale; a
+    A numeric feature costs |delta| / R with R its training range; a
     categorical feature costs 1 when its category changes. One-hot columns are
     divided by 2, so on valid encodings a changed category (two flipped
-    columns) costs exactly 1 and the distance stays a scaled L1 that
-    neighbour indices can use. On all-numeric data it is the mean robust-scaled
-    L1 over columns.
+    columns) costs exactly 1 and the distance is a scaled L1 that neighbour
+    indices can use. Points outside the training range may cost more than 1
+    per feature; the cost is not clipped.
     """
 
     def __init__(self, X_train: pd.DataFrame, schema: FeatureSchema | None = None):
         schema = schema or FeatureSchema.numeric_only(X_train.columns)
-        self.scale = robust_feature_scale(X_train).to_numpy(copy=True)
+        self.scale = feature_range(X_train).to_numpy(copy=True)
         self.n_features = len(schema.raw_features)
         for group in schema.one_hot_groups().values():
             self.scale[group] = 2.0
@@ -68,7 +67,7 @@ class PlausibilityReference:
 
     Built once per base model because the target-class set, scales and neighbour
     indices are shared by every method's counterfactuals. kNN distance, LOF and
-    yNN all use the mixed distance: Manhattan distance on scaled inputs.
+    yNN all use the Gower distance: Manhattan distance on range-scaled inputs.
     """
 
     def __init__(
@@ -82,7 +81,7 @@ class PlausibilityReference:
         target_class: int = 1,
     ) -> None:
         self.k = k
-        self.distance = MixedDistance(X_train, schema)
+        self.distance = GowerDistance(X_train, schema)
         self.scale = self.distance.scale
         train = X_train.to_numpy(dtype=float)
         probability = base_model.predict(X_train).iloc[:, 0].to_numpy()

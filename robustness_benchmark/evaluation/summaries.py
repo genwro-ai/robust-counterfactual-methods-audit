@@ -29,8 +29,8 @@ def generation_summary(generation: pd.DataFrame) -> list[dict[str, object]]:
                     if len(valid_group)
                     else None
                 ),
-                "mean_l1_robust_scale": (
-                    float(valid_group["l1_robust_scale_mean"].mean())
+                "mean_gower_distance": (
+                    float(valid_group["gower_distance"].mean())
                     if len(valid_group)
                     else None
                 ),
@@ -88,8 +88,8 @@ def apas_generation_summary(generation: pd.DataFrame) -> list[dict[str, object]]
                 "certified_n": int(certified.sum()),
                 "certified_coverage": float(certified.mean()),
                 "mean_runtime_seconds": float(group["runtime_seconds"].mean()),
-                "mean_l1_robust_scale": (
-                    float(generated_valid["l1_robust_scale_mean"].mean())
+                "mean_gower_distance": (
+                    float(generated_valid["gower_distance"].mean())
                     if len(generated_valid)
                     else None
                 ),

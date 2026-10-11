@@ -17,7 +17,7 @@ from torch import nn
 from torch.autograd import Variable
 from torch.optim import Adam
 
-from robustness_benchmark.methods.ce_generator import CEGenerator
+from robustness_benchmark.methods.base import CEGenerator
 from robustness_benchmark.methods.feature_constraints import (
     search_projection,
     valid_projection,

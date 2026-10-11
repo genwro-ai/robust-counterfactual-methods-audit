@@ -12,7 +12,9 @@ from gurobipy import GRB, Model
 from gurobipy.gurobipy import quicksum
 
 from robustness_benchmark.core.task import ClassificationTask
-from robustness_benchmark.methods.interval_abstraction import IntervalAbstractionPytorch
+from robustness_benchmark.methods.milp.interval_abstraction import (
+    IntervalAbstractionPytorch,
+)
 
 
 class OptSolver:

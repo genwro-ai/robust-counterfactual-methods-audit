@@ -3,9 +3,9 @@ from gurobipy import GRB, Model
 from gurobipy.gurobipy import quicksum
 
 from robustness_benchmark.core.task import ClassificationTask
-from robustness_benchmark.methods.ce_generator import CEGenerator
+from robustness_benchmark.methods.base import CEGenerator
 from robustness_benchmark.methods.feature_constraints import mutable_groups
-from robustness_benchmark.methods.optimization import OptSolver
+from robustness_benchmark.methods.milp.optimization import OptSolver
 
 
 class MCE(CEGenerator):

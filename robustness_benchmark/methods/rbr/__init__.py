@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from scipy.spatial.distance import pdist
 
-from robustness_benchmark.methods.rbr_core import RBR as AuthorRBR
+from robustness_benchmark.methods.rbr.core import RBR as AuthorRBR
 
 RBR_IMPLEMENTATION = "nguyen2022_authors_final_iterate_v2"
 

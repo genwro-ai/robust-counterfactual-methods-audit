@@ -304,16 +304,15 @@ The packet also writes:
 - **End-to-end robustness**: coverage × base validity × empirical
   robustness, i.e. the fraction of requests that yield a CFE that is valid for
   the base model and remains valid after the change.
-- **Distance**: a Gower-style mean over raw features. A numeric feature
-  contributes its standardized change divided by its training median absolute
-  deviation (standard deviation when the MAD is zero); a categorical feature
-  contributes 1 if its category changes. On all-numeric data this is the
-  scaled $\ell_1$ distance of the paper.
+- **Distance**: Gower's distance, the mean over raw features of a
+  per-feature cost. A numeric feature contributes its change divided by its
+  training range; a categorical feature contributes 1 if its category changes.
+  The workshop paper used a MAD-scaled $\ell_1$ instead.
 
 - **Sparsity**: number (and fraction) of raw features changed by more than
   $10^{-6}$; a one-hot group counts once.
 - **Plausibility**, all computed from the base model and training data only:
-  - *kNN distance*: mean distance, scaled as for proximity, to the five
+  - *kNN distance*: mean Gower distance to the five
     nearest training points the base model predicts as the target class;
     `knn_distance_relative` divides it by the median leave-one-out kNN
     distance of those points, so values near 1 are as typical as real

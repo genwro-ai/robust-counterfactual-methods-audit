@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from sklearn.utils import check_random_state
 
-from robustness_benchmark.methods.rbr_loss import RBRLoss
+from robustness_benchmark.methods.rbr.loss import RBRLoss
 
 
 class RBR:

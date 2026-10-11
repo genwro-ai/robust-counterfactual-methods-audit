@@ -77,7 +77,7 @@ def test_seed_summary_preserves_an_undefined_metric():
             "pooled_conditional_survival": [np.nan] * 5,
             "end_to_end_changed_validity": [0.0] * 5,
             "changed_validity_given_base_valid": [np.nan] * 5,
-            "mean_l1_robust_scale": [np.nan] * 5,
+            "mean_gower_distance": [np.nan] * 5,
         }
     )
 
@@ -123,7 +123,7 @@ def test_paper_tradeoff_omits_a_method_without_proximity(tmp_path):
             "dataset": dataset,
             "model_type": "logistic",
             "method": method,
-            "mean_l1_robust_scale": (
+            "mean_gower_distance": (
                 np.nan if (dataset, method) == ("heloc", "robx_robust") else 0.5
             ),
             "changed_validity_given_base_valid": 0.8,
@@ -188,7 +188,7 @@ def synthetic_results(plausibility: bool = True) -> tuple[pd.DataFrame, pd.DataF
                         "certified_coverage": 0.9,
                         "changed_validity_given_base_valid": 0.5 + skill,
                         "end_to_end_changed_validity": 0.4 + skill,
-                        "mean_l1_robust_scale": 1.0 - skill + rng.normal(0, 0.01),
+                        "mean_gower_distance": 1.0 - skill + rng.normal(0, 0.01),
                         "mean_knn_distance_relative": (
                             1.0 + rng.uniform() if plausibility else None
                         ),

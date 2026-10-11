@@ -10,7 +10,7 @@ from robustness_benchmark.cli.full_benchmark import (
 )
 from robustness_benchmark.evaluation.plausibility import (
     PlausibilityReference,
-    robust_feature_scale,
+    feature_range,
 )
 
 
@@ -46,10 +46,10 @@ def test_sparsity_counts_changed_features_above_tolerance():
     assert row["fraction_changed_features"] == pytest.approx(2 / 3)
 
 
-def test_knn_distance_matches_hand_computed_robust_l1():
+def test_knn_distance_matches_hand_computed_gower():
     X = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, -5.0, -6.0]})
     reference = PlausibilityReference(X, ThresholdModel(), k=2)
-    scale = robust_feature_scale(X).iloc[0]
+    scale = feature_range(X).iloc[0]
     # Target points are 1..7; the two nearest to 10 are 7 and 6.
     expected = ((10 - 7) + (10 - 6)) / 2 / scale
     factual = pd.DataFrame({"a": [-1.0]})
@@ -129,7 +129,7 @@ def write_runs(output, generation_columns: dict) -> None:
             "generation_status": ["success", "base_invalid"],
             "base_valid": [True, False],
             "runtime_seconds": [1.0, 2.0],
-            "l1_robust_scale_mean": [0.5, None],
+            "gower_distance": [0.5, None],
             "method_config": ["{}"] * 2,
             **generation_columns,
         }

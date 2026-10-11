@@ -1,5 +1,8 @@
+"""Base classes inherited from RobustX, and prediction helpers for adapters."""
+
 from abc import ABC, abstractmethod
 
+import numpy as np
 import pandas as pd
 
 from robustness_benchmark.core.task import ClassificationTask
@@ -124,3 +127,44 @@ class CEGenerator(ABC):
         @return: distance Function, (DataFrame, DataFrame) -> Int
         """
         return self.__customFunc
+
+
+class ModelChangesRobustnessEvaluator(ABC):
+    """
+    Abstract base class for evaluating the robustness of CEs with respect to model changes.
+
+    This class defines an interface for evaluating how robust a CE's validity are
+    when the model parameters are changed.
+    """
+
+    def __init__(self, ct: ClassificationTask):
+        """
+        Initializes the ModelChangesRobustnessEvaluator with a given task.
+
+        @param ct: The task for which robustness evaluations are being made.
+                   Provided as a Task instance.
+        """
+        self.task = ct
+
+    @abstractmethod
+    def evaluate(self, instance, neg_value=0):
+        """
+        Abstract method to evaluate the robustness of a model's prediction on a given instance.
+
+        Must be implemented by subclasses.
+
+        @param instance: The instance for which to evaluate robustness.
+                         This could be a single data point for the model.
+        @param neg_value: The value considered negative in the target variable.
+                          Used to determine if the counterfactual flips the prediction.
+        @return: Result of the robustness evaluation. The return type should be defined by the subclass.
+        """
+
+
+def predict_crisp(model, values: np.ndarray) -> np.ndarray:
+    probability = model.predict(np.asarray(values)).iloc[:, 0].to_numpy()
+    return (probability >= 0.5).astype(int)
+
+
+def predict_proba(model, values: np.ndarray) -> np.ndarray:
+    return model.predict_proba(np.asarray(values)).to_numpy()

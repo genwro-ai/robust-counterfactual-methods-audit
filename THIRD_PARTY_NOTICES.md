@@ -35,8 +35,8 @@ SOFTWARE.
 
 ## Robust Bayesian Recourse (RBR)
 
-The local implementation in `tae_workshop/methods/rbr_core.py` and
-`tae_workshop/methods/rbr_loss.py` is adapted from
+The local implementation in `tae_workshop/methods/rbr/core.py` and
+`tae_workshop/methods/rbr/loss.py` is adapted from
 <https://github.com/VinAIResearch/robust-bayesian-recourse>, commit
 `8eaa8c27a5f6c61f226267b5dd124250e9c6b419`.
 

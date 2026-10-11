@@ -7,12 +7,12 @@ from robustness_benchmark.core.training import make_betarce_generation_model
 from robustness_benchmark.evaluation.aggregate import generation_metrics
 from robustness_benchmark.methods import registry as methods
 from robustness_benchmark.methods.betarce import (
+    BetaRCEAdapter,
     BetaRCEResult,
     beta_left_bound_batch,
     beta_robustness_mask,
 )
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
-from robustness_benchmark.methods.robust_adapters import BetaRCEAdapter
 from robustness_benchmark.methods.robx import (
     robx_algorithm,
     tau_from_stability_quantile,
@@ -181,7 +181,7 @@ def test_betarce_adapter_robustifies_a_base_counterfactual(monkeypatch):
         return base_counterfactual
 
     monkeypatch.setattr(
-        "robustness_benchmark.methods.robust_adapters.growing_spheres_search",
+        "robustness_benchmark.methods.betarce.growing_spheres_search",
         fake_base_search,
     )
 

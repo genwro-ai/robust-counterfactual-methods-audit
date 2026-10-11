@@ -5,9 +5,9 @@ import torch
 from gurobipy import GRB
 
 from robustness_benchmark.core.model import TorchBinaryModel
-from robustness_benchmark.methods.apas_calibration import rnce_method_config
+from robustness_benchmark.methods.calibration import rnce_method_config
 from robustness_benchmark.methods.configuration import LOCKED_CONFIGS
-from robustness_benchmark.methods.delta_robustness import DeltaRobustnessEvaluator
+from robustness_benchmark.methods.milp.delta_robustness import DeltaRobustnessEvaluator
 from robustness_benchmark.methods.registry import (
     create_generator,
     generate_counterfactuals,

@@ -25,7 +25,7 @@ from robustness_benchmark.evaluation.summaries import (
     seed_family_survival_summary,
 )
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION
-from robustness_benchmark.methods.apas_calibration import stable_hash
+from robustness_benchmark.methods.calibration import stable_hash
 from robustness_benchmark.methods.configuration import LOCKED_CONFIGS
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
 
