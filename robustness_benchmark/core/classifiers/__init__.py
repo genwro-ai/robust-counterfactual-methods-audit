@@ -6,6 +6,8 @@ from robustness_benchmark.core.classifiers.base import (
     TORCH_NETWORK,
     Classifier,
     missing_capabilities,
+    predict_crisp,
+    predict_proba,
 )
 from robustness_benchmark.core.classifiers.gradient_boosting import XGBoostClassifier
 from robustness_benchmark.core.classifiers.logistic import LogisticClassifier
@@ -19,9 +21,9 @@ MODEL_TYPES = tuple(MODEL_CLASSES)
 
 
 def classifier_from_payload(payload: dict[str, Any]) -> Classifier:
-    """Restore a classifier; payloads without ``model_type`` are legacy MLPs."""
+    """Restore a classifier from a checkpoint payload."""
 
-    model_type = str(payload.get("model_type", TorchBinaryModel.model_type))
+    model_type = str(payload["model_type"])
     if model_type not in MODEL_CLASSES:
         raise ValueError(f"Unknown model type {model_type!r}")
     return MODEL_CLASSES[model_type].from_checkpoint_payload(payload)
@@ -39,4 +41,6 @@ __all__ = [
     "XGBoostClassifier",
     "classifier_from_payload",
     "missing_capabilities",
+    "predict_crisp",
+    "predict_proba",
 ]

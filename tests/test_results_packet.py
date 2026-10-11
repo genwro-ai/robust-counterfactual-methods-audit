@@ -13,6 +13,7 @@ from robustness_benchmark.cli.results_packet import (
     FAMILY_ORDER,
     MARGIN_METHODS,
     METHOD_ORDER,
+    QUALITY_SUMMARY_COLUMNS,
     cross_class_markdown,
     cross_class_summary,
     discover_runs,
@@ -78,6 +79,8 @@ def test_seed_summary_preserves_an_undefined_metric():
             "end_to_end_changed_validity": [0.0] * 5,
             "changed_validity_given_base_valid": [np.nan] * 5,
             "mean_gower_distance": [np.nan] * 5,
+            "validity_before_projection_given_generated": [np.nan] * 5,
+            **{column: [np.nan] * 5 for column in QUALITY_SUMMARY_COLUMNS},
         }
     )
 
@@ -152,17 +155,17 @@ def test_method_availability_reports_not_run_methods():
     assert table.loc["kdtree", "xgboost"] == "1 datasets"
 
 
-def test_discover_runs_keeps_the_legacy_mlp_directory(tmp_path):
-    (tmp_path / "full_heloc").mkdir()
-    xgboost_root = tmp_path / "full_heloc_xgboost"
-    xgboost_root.mkdir()
-    (xgboost_root / "summary.json").write_text(json.dumps({"model_type": "xgboost"}))
+def test_discover_runs_reads_one_directory_per_dataset_and_model_type(tmp_path):
+    for model_type in ("mlp", "xgboost"):
+        root = tmp_path / f"full_heloc_{model_type}"
+        root.mkdir()
+        (root / "summary.json").write_text(json.dumps({"model_type": model_type}))
 
     runs = discover_runs(tmp_path)
 
     assert runs == [
-        ("heloc", "mlp", tmp_path / "full_heloc"),
-        ("heloc", "xgboost", xgboost_root),
+        ("heloc", "mlp", tmp_path / "full_heloc_mlp"),
+        ("heloc", "xgboost", tmp_path / "full_heloc_xgboost"),
     ]
 
 
@@ -322,9 +325,6 @@ def test_plausibility_figure_is_skipped_for_runs_without_the_metric(tmp_path):
     overall, _ = synthetic_results(plausibility=False)
 
     plot_plausibility(tmp_path, overall, "mlp")
-    plot_plausibility(
-        tmp_path, overall.drop(columns="mean_knn_distance_relative"), "mlp"
-    )
 
     assert not list(tmp_path.glob("paper_robustness_plausibility_*"))
 

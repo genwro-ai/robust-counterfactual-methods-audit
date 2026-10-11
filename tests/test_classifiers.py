@@ -127,25 +127,6 @@ def test_checkpoint_round_trip_for_every_model_class(tmp_path, model_class, kwar
     )
 
 
-def test_legacy_mlp_checkpoint_without_model_type_still_loads(tmp_path):
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(3,), seed=12)
-    path = tmp_path / "legacy.pt"
-    payload = {
-        "model_id": "legacy",
-        "metadata": {},
-        **model.checkpoint_payload(),
-    }
-    torch.save(payload, path)
-
-    restored, _ = load_model_checkpoint(path)
-
-    X = pd.DataFrame({"a": [0.0, 1.0], "b": [1.0, 0.0]})
-    assert type(restored) is TorchBinaryModel
-    np.testing.assert_array_equal(
-        restored.predict(X).to_numpy(), model.predict(X).to_numpy()
-    )
-
-
 def test_capabilities_by_model_class():
     assert TorchBinaryModel.capabilities == {DIFFERENTIABLE, TORCH_NETWORK}
     assert LogisticClassifier.capabilities == {DIFFERENTIABLE, TORCH_NETWORK, LINEAR}

@@ -44,7 +44,6 @@ METHODS = (
     "roar",
     *GROWING_SPHERES_TARGETS,
 )
-METHOD_CHOICES = (*METHODS, "robx")
 
 # Methods not listed only query predictions and run on every model class.
 METHOD_REQUIRED_CAPABILITIES: dict[str, frozenset[str]] = {
@@ -124,12 +123,6 @@ LOCKED_CONFIGS: dict[str, dict[str, object]] = {
         "variance": 0.01,
         "tau_quantile": 0.9,
         "tau_calibration": "training_target_stability_quantile_v1",
-        "stability_samples": 1_000,
-    },
-    "robx": {
-        "implementation": ROBX_IMPLEMENTATION,
-        "variance": 0.01,
-        "tau": 0.5,
         "stability_samples": 1_000,
     },
     "trex": {

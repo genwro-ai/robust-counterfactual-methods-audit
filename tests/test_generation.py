@@ -4,6 +4,7 @@ import pytest
 
 from robustness_benchmark.core.classifiers import TorchBinaryModel
 from robustness_benchmark.core.model_changes import make_betarce_generation_model
+from robustness_benchmark.core.model_specs import MLPSpec
 from robustness_benchmark.evaluation.aggregate import generation_metrics
 from robustness_benchmark.methods import registry as methods
 from robustness_benchmark.methods.betarce import (
@@ -41,6 +42,7 @@ def test_generation_coverage_is_separate_from_validity():
         {
             "generation_status": ["success", "base_invalid", "exception"],
             "base_valid": [True, False, False],
+            "base_valid_before_projection": [True, True, None],
         }
     )
 
@@ -229,8 +231,7 @@ def test_betarce_bootstrap_members_keep_base_initialization(monkeypatch):
         Split(),
         base_seed=2026,
         member=7,
-        hidden_dim=(32, 32),
-        epochs=300,
+        spec=MLPSpec(hidden_dim=(32, 32), epochs=300),
     )
 
     assert result is not None

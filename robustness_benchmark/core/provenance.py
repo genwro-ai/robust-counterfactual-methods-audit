@@ -10,12 +10,6 @@ import torch
 from robustness_benchmark.core.classifiers import Classifier, classifier_from_payload
 
 
-def json_value(value: Any) -> Any:
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
-
-
 def row_id_value(value: object) -> int | str:
     if isinstance(value, (int, np.integer)):
         return int(value)

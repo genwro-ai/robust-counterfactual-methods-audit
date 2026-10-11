@@ -101,7 +101,7 @@ FAST_CONFIGS = {
     "apas": {"delta": 0.01, "wall_time_seconds": 10.0},
     "rbr": {"num_counterfactuals": 20, "num_samples": 50, "maximum_iterations": 50},
     "roar_lime": {"num_samples": 500, "maximum_iterations": 500, "lr": 0.01},
-    "robx": {"variance": 0.01, "tau": 0.5, "stability_samples": 100},
+    "robx_balanced": {"variance": 0.01, "tau": 0.5, "stability_samples": 100},
     "betarce": {
         "generation_ensemble_n": 4,
         "delta": 0.5,
@@ -124,8 +124,8 @@ VALID_BEFORE_PROJECTION = {
 # Faithful to their original code, these search one-hot and integer columns as
 # continuous (RNCE in its line search) and return the relaxed point; only the
 # registry's projection makes their output valid. All but RobX keep immutables.
-RELAXED_SEARCH = {"robx", "trex", "roar_lime", "rbr", "rnce"}
-RELAXED_IMMUTABLES = {"robx"}
+RELAXED_SEARCH = {"robx_balanced", "trex", "roar_lime", "rbr", "rnce"}
+RELAXED_IMMUTABLES = {"robx_balanced"}
 
 
 class RecordingGenerator:
@@ -413,7 +413,7 @@ def test_numeric_data_outputs_match_without_and_with_identity_schema():
     )
     scale = feature_range(X.astype(np.float32)).to_numpy()
 
-    methods = ("kdtree", "wachter", "growing_spheres", "robx", "rbr", "trex")
+    methods = ("kdtree", "wachter", "growing_spheres", "robx_balanced", "rbr", "trex")
     for method in (*methods, "roar_lime", "roar"):
         base = logistic if method == "roar" else model
         factuals = adverse(base, X)
@@ -448,7 +448,10 @@ def test_validity_before_projection_is_recorded(mixed_setting):
     task = make_task(model, X, y, seed=3, schema=schema)
 
     _, rows = generate_counterfactuals(
-        "robx", task, adverse(model, X), method_config=FAST_CONFIGS["robx"]
+        "robx_balanced",
+        task,
+        adverse(model, X),
+        method_config=FAST_CONFIGS["robx_balanced"],
     )
 
     generated = [

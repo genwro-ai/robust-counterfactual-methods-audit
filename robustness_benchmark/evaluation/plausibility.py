@@ -115,7 +115,7 @@ class PlausibilityReference:
 
 
 def plausibility_summary(valid: pd.DataFrame) -> dict[str, float | None]:
-    """Means over base-valid rows; None when absent (runs predating the metrics)."""
+    """Means over base-valid rows; None for metrics a run did not record."""
 
     def mean(column: str, values: pd.Series | None = None) -> float | None:
         if column not in valid.columns:

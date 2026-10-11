@@ -37,8 +37,7 @@ def load_model_bank(
     base_rows = catalog[catalog["base_model_id"].str.endswith(f"seed_{base_seed}")]
     base_id, base_model = load_base_model(bank, base_seed)
 
-    # Older catalogs can contain obsolete "excluded" labels. Reapply the
-    # current relative severity stratification to every model in the bank.
+    # Severity is relative to the whole bank: the rule shared with bank building.
     rows = base_rows.to_dict("records")
     stratify_severity(rows)
     changes: list[ChangedModel] = []

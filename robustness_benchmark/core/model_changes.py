@@ -16,7 +16,6 @@ from robustness_benchmark.core.fitting import fit_spec
 from robustness_benchmark.core.model_specs import (
     FULL_VARIANTS_PER_FAMILY,
     RELATIVE_PARAMETER_RADII,
-    MLPSpec,
     ModelSpec,
     perturb_torch_parameters,
     torch_incremental_update,
@@ -112,7 +111,8 @@ def make_bounded_parameter_change(
 # A configuration candidate whose validation probabilities differ from the
 # base model's by less than this mean absolute amount reproduces the base.
 DISTINCT_VALIDATION_MAE = 1e-3
-FULL_CHANGE_FAMILIES = MLPSpec.change_families
+
+
 SMOKE_CHANGE_FAMILIES = (
     "seed",
     "bootstrap",
@@ -135,15 +135,12 @@ def make_changed_models(
     base_model: Classifier,
     *,
     base_seed: int,
-    epochs: int = 300,
-    hidden_dim: tuple[int, ...] = (32, 32),
+    spec: ModelSpec,
     profile: str = "full",
-    spec: ModelSpec | None = None,
 ) -> list[ChangedModel]:
     """Construct a deterministic model-change bank.
 
-    ``spec`` describes how ``base_model`` was trained; without one the base is
-    an MLP with ``hidden_dim`` trained for ``epochs``. The full profile
+    ``spec`` describes how ``base_model`` was trained. The full profile
     contains 25 candidates in each change family that applies to the model
     class. The smoke profile keeps one cheap representative per applicable
     family in ``SMOKE_CHANGE_FAMILIES`` for fast contract tests.
@@ -151,8 +148,6 @@ def make_changed_models(
 
     if profile not in {"full", "smoke"}:
         raise ValueError(f"Unknown model-bank profile {profile!r}")
-    if spec is None:
-        spec = MLPSpec(hidden_dim=tuple(hidden_dim), epochs=epochs)
     families = tuple(
         family
         for family in spec.change_families
@@ -447,26 +442,12 @@ def make_changed_models(
     return changed
 
 
-def _resolve_spec(
-    spec: ModelSpec | None,
-    hidden_dim: tuple[int, ...] | None,
-    epochs: int | None,
-) -> ModelSpec:
-    if spec is not None:
-        return spec
-    if hidden_dim is None or epochs is None:
-        raise ValueError("pass a spec, or hidden_dim and epochs for an MLP")
-    return MLPSpec(hidden_dim=tuple(hidden_dim), epochs=epochs)
-
-
 def make_betarce_generation_ensemble(
     data: DatasetSplit,
     *,
     base_seed: int,
-    hidden_dim: tuple[int, ...] | None = None,
-    epochs: int | None = None,
+    spec: ModelSpec,
     size: int = BETARCE_GENERATION_ENSEMBLE_SIZE,
-    spec: ModelSpec | None = None,
 ) -> list[Classifier]:
     """Train BetaRCE's separate bootstrap ensemble with fixed initialization."""
 
@@ -475,8 +456,6 @@ def make_betarce_generation_ensemble(
             data,
             base_seed=base_seed,
             member=member,
-            hidden_dim=hidden_dim,
-            epochs=epochs,
             spec=spec,
         )
         for member in range(size)
@@ -488,9 +467,7 @@ def make_betarce_generation_model(
     *,
     base_seed: int,
     member: int,
-    hidden_dim: tuple[int, ...] | None = None,
-    epochs: int | None = None,
-    spec: ModelSpec | None = None,
+    spec: ModelSpec,
 ) -> Classifier:
     """Train one resumable member of BetaRCE's bootstrap model space."""
 
@@ -500,7 +477,7 @@ def make_betarce_generation_model(
     sampling_seed = base_seed + 100_000 + member
     index = np.random.default_rng(sampling_seed).integers(0, n, size=n)
     return fit_spec(
-        _resolve_spec(spec, hidden_dim, epochs),
+        spec,
         data.X_train.iloc[index].reset_index(drop=True),
         data.y_train.iloc[index].reset_index(drop=True),
         data.X_val,
@@ -582,29 +559,3 @@ def make_update_replicas(
             )
         )
     return models
-
-
-def make_apas_calibration_models(
-    data: DatasetSplit,
-    base_model: TorchBinaryModel,
-    *,
-    base_seed: int,
-    size: int = 10,
-    update_epochs: int = 1,
-    batch_size: int = 8,
-    learning_rate: float = 1e-3,
-    weight_decay: float = 0.0,
-) -> list[ChangedModel]:
-    """APAS radius replicas: bootstrap samples of the whole update pool."""
-
-    return make_update_replicas(
-        data,
-        base_model,
-        base_seed=base_seed,
-        name="apas",
-        size=size,
-        update_epochs=update_epochs,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-    )

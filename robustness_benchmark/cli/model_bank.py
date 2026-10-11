@@ -10,11 +10,7 @@ import torch
 
 from robustness_benchmark.core.classifiers import MODEL_TYPES
 from robustness_benchmark.core.data import DatasetSplit, load_dataset
-from robustness_benchmark.core.fitting import (
-    SELECTION_DEV_SEEDS,
-    fit_spec,
-    select_base_spec,
-)
+from robustness_benchmark.core.fitting import fit_spec, select_base_spec
 from robustness_benchmark.core.model_changes import (
     BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
     BETARCE_GENERATION_ENSEMBLE_SIZE,
@@ -24,6 +20,13 @@ from robustness_benchmark.core.model_changes import (
     make_changed_models,
 )
 from robustness_benchmark.core.model_specs import MODEL_SPECS, MLPSpec, ModelSpec
+from robustness_benchmark.core.protocol import (
+    BASE_SEEDS,
+    SELECTION_DEV_SEEDS,
+    SPLIT_SEED,
+    SPLIT_VERSION,
+    bank_dir,
+)
 from robustness_benchmark.core.provenance import (
     file_sha256,
     save_model_checkpoint,
@@ -36,12 +39,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="breast_cancer")
     parser.add_argument("--model-type", choices=MODEL_TYPES, default="mlp")
-    parser.add_argument("--split-version", default="behavior_v3")
-    parser.add_argument("--split-seed", type=int, default=2026)
+    parser.add_argument("--split-version", default=SPLIT_VERSION)
+    parser.add_argument("--split-seed", type=int, default=SPLIT_SEED)
     parser.add_argument(
         "--epochs", type=int, default=300, help="MLP training epochs (MLP only)"
     )
-    parser.add_argument("--base-seeds", type=int, nargs="+", default=[2026, 2027, 2028])
+    parser.add_argument("--base-seeds", type=int, nargs="+", default=list(BASE_SEEDS))
     parser.add_argument(
         "--base-architecture",
         type=int,
@@ -57,7 +60,7 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="Base-model banks to train concurrently (default: 2)",
     )
-    parser.add_argument("--output", type=Path, default=Path("artifacts/model_bank"))
+    parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
 
@@ -229,7 +232,7 @@ def prepare_model_bank(
     *,
     dataset: str,
     split_version: str,
-    split_seed: int = 2026,
+    split_seed: int = SPLIT_SEED,
     model_type: str = "mlp",
     epochs: int,
     base_seeds: list[int],
@@ -241,6 +244,14 @@ def prepare_model_bank(
 ) -> dict[str, object]:
     if workers < 1:
         raise ValueError("workers must be positive")
+    manifest = output / "manifest.json"
+    if manifest.is_file():
+        existing = json.loads(manifest.read_text())
+        if (existing["dataset"], existing["model_type"]) != (dataset, model_type):
+            raise ValueError(
+                f"{output} holds a {existing['model_type']} bank for "
+                f"{existing['dataset']}; choose another --output"
+            )
     data = load_dataset(dataset, seed=split_seed, split_version=split_version)
     output.mkdir(parents=True, exist_ok=True)
     if model_type == "mlp":
@@ -332,6 +343,8 @@ def prepare_model_bank(
 
 def main() -> None:
     args = parse_args()
+    if args.output is None:
+        args.output = bank_dir(Path("artifacts"), args.dataset, args.model_type)
     summary = prepare_model_bank(
         dataset=args.dataset,
         split_version=args.split_version,

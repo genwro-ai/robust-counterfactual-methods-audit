@@ -20,6 +20,11 @@ from robustness_benchmark.core.model_changes import (
     make_betarce_generation_model,
 )
 from robustness_benchmark.core.model_specs import ModelSpec, spec_from_manifest
+from robustness_benchmark.core.protocol import (
+    EVALUATION_FACTUALS_SEED_OFFSET,
+    STABILITY_TAU_SEED_OFFSET,
+    TUNING_FACTUALS_SEED_OFFSET,
+)
 from robustness_benchmark.core.provenance import (
     file_sha256,
     load_model_checkpoint,
@@ -29,7 +34,6 @@ from robustness_benchmark.core.provenance import (
 from robustness_benchmark.evaluation.aggregate import (
     aggregate_survival,
     generation_metrics,
-    normalize_survival_schema,
 )
 from robustness_benchmark.evaluation.plausibility import (
     PlausibilityReference,
@@ -46,7 +50,6 @@ from robustness_benchmark.methods.calibration import (
 )
 from robustness_benchmark.methods.configuration import (
     LOCKED_CONFIGS,
-    METHOD_CHOICES,
     METHODS,
     TUNING_GRIDS,
     unsupported_methods,
@@ -65,14 +68,12 @@ ADAPTIVE_ROBX_METHODS = ("robx_balanced", "robx_robust")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--bank", type=Path, default=Path("artifacts/model_bank_breast_cancer")
+        "--bank", type=Path, default=Path("artifacts/model_bank_breast_cancer_mlp")
     )
     parser.add_argument(
-        "--output", type=Path, default=Path("artifacts/full_breast_cancer")
+        "--output", type=Path, default=Path("artifacts/full_breast_cancer_mlp")
     )
-    parser.add_argument(
-        "--methods", nargs="+", choices=METHOD_CHOICES, default=list(METHODS)
-    )
+    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
     parser.add_argument("--n-factuals", type=int, default=50)
     parser.add_argument("--tuning-factuals", type=int, default=25)
     parser.add_argument("--base-seeds", nargs="+", type=int)
@@ -148,7 +149,10 @@ def tune_methods(
         configs[method] = dict(LOCKED_CONFIGS.get(method, {}))
     base_id, base_model = load_base_model(bank, base_seed)
     factuals, _, _ = select_factuals(
-        base_model, data.X_val, tuning_factuals, seed=base_seed + 70_000
+        base_model,
+        data.X_val,
+        tuning_factuals,
+        seed=base_seed + TUNING_FACTUALS_SEED_OFFSET,
     )
     task = make_task(
         base_model,
@@ -239,7 +243,7 @@ def resolve_robx_seed_configs(
         target_probability,
         variance=variance,
         N=stability_samples,
-        seed=base_seed + 81_000,
+        seed=base_seed + STABILITY_TAU_SEED_OFFSET,
     )
     for method in adaptive:
         config = resolved[method]
@@ -468,7 +472,6 @@ def write_summary(
         sorted(output.glob("runs/*/*/survival.parquet")),
         base_model_ids=invocation_base_model_ids,
     )
-    survival = normalize_survival_schema(survival)
     generation_runs = set(
         generation[["base_model_id", "method"]].itertuples(index=False, name=None)
     )
@@ -674,8 +677,7 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     bank_fingerprint = model_bank_fingerprint(args.bank)
     available_base_seeds = [int(seed) for seed in bank_manifest["base_seeds"]]
-    # Banks built before split_seed was recorded all used the 2026 split.
-    split_seed = int(bank_manifest.get("split_seed", 2026))
+    split_seed = int(bank_manifest["split_seed"])
     data = load_dataset(
         str(bank_manifest["dataset"]),
         seed=split_seed,
@@ -781,7 +783,7 @@ def main() -> None:
             base_model,
             data.X_test,
             args.n_factuals,
-            seed=int(base_seed) + 30_000,
+            seed=int(base_seed) + EVALUATION_FACTUALS_SEED_OFFSET,
         )
         task = make_task(
             base_model,

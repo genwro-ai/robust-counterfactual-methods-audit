@@ -218,10 +218,3 @@ def test_spec_serialization_round_trip():
     for spec in (MLPSpec(hidden_dim=(8, 4)), LogisticSpec(C=3.0), XGBoostSpec()):
         assert spec_from_dict(spec.to_dict()) == spec
         assert spec_from_manifest({"model_spec": spec.to_dict()}) == spec
-
-
-def test_legacy_manifest_is_an_mlp_bank():
-    spec = spec_from_manifest({"selected_architecture": [32, 32], "epochs": 300})
-
-    assert spec == MLPSpec(hidden_dim=(32, 32), epochs=300)
-    assert spec.id_fragment() == "mlp_32_32"

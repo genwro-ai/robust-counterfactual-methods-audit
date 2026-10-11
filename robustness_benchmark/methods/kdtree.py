@@ -21,7 +21,6 @@ class KDTreeNNCE(CEGenerator):
 
     Attributes:
         _task (Task): The task to solve, inherited from CEGenerator.
-        __customFunc (callable, optional): A custom distance function, inherited from CEGenerator.
     """
 
     def _generation_method(
@@ -31,8 +30,6 @@ class KDTreeNNCE(CEGenerator):
         Generates a counterfactual explanation using KD-Tree for nearest neighbor search.
 
         @param instance: The instance for which to generate a counterfactual.
-        @param distance_func: The function used to calculate the distance between points.
-        @param custom_distance_func: Optional custom distance function. (Not used in this method)
         @param gamma: The distance threshold for convergence. (Not used in this method)
         @param column_name: The name of the target column. (Not used in this method)
         @param neg_value: The value considered negative in the target variable.

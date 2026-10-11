@@ -1,22 +1,19 @@
 from gurobipy import GRB, Model
 
 from robustness_benchmark.core.task import ClassificationTask
-from robustness_benchmark.methods.base import (
-    ModelChangesRobustnessEvaluator,
-)
 from robustness_benchmark.methods.milp.optimization import OptSolver
 
 
-class DeltaRobustnessEvaluator(ModelChangesRobustnessEvaluator):
+class DeltaRobustnessEvaluator:
     """
     A robustness evaluator that uses a Mixed-Integer Linear Programming (MILP) approach to evaluate
     the robustness of a model's predictions when perturbations are applied.
 
-    This class inherits from ModelChangesRobustnessEvaluator and uses the Gurobi optimizer
-    to determine if the model's prediction remains stable under perturbations.
+    It uses the Gurobi optimizer to determine if the model's prediction remains
+    stable under perturbations.
 
     Attributes:
-        task (Task): The task to solve, inherited from ModelChangesRobustnessEvaluator.
+        task (Task): The task to solve.
         opt (OptSolver): An optimizer instance for setting up and solving the MILP problem.
     """
 
@@ -26,7 +23,7 @@ class DeltaRobustnessEvaluator(ModelChangesRobustnessEvaluator):
 
         @param ct: The task to solve, provided as a Task instance.
         """
-        super().__init__(ct)
+        self.task = ct
         self.opt = OptSolver(ct)
 
     def evaluate(

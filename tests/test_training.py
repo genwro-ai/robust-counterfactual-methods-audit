@@ -7,8 +7,6 @@ import torch
 
 from robustness_benchmark.core.classifiers import TorchBinaryModel
 from robustness_benchmark.core.model_changes import (
-    FULL_CHANGE_FAMILIES,
-    make_apas_calibration_models,
     make_bounded_parameter_change,
     make_changed_models,
     make_update_replicas,
@@ -18,6 +16,7 @@ from robustness_benchmark.core.model_specs import (
     FULL_VARIANTS_PER_FAMILY,
     SGD_TRAINING_CONFIGS,
     TRAINING_CONFIGS,
+    MLPSpec,
 )
 
 
@@ -70,10 +69,11 @@ def test_apas_calibration_updates_copy_checkpoint_and_vary_only_update_sample():
         for name, value in base.get_torch_model().state_dict().items()
     }
 
-    replicas = make_apas_calibration_models(
+    replicas = make_update_replicas(
         SmallSplit(),
         base,
         base_seed=2026,
+        name="apas",
         size=3,
         update_epochs=1,
         batch_size=2,
@@ -105,14 +105,13 @@ def test_full_bank_has_25_unique_candidates_per_family(monkeypatch):
         SmallSplit(),
         base,
         base_seed=2026,
-        epochs=1,
-        hidden_dim=(32, 32),
+        spec=MLPSpec(hidden_dim=(32, 32), epochs=1),
         profile="full",
     )
 
     counts = Counter(change.change_family for change in changes)
     assert counts == {
-        family: FULL_VARIANTS_PER_FAMILY for family in FULL_CHANGE_FAMILIES
+        family: FULL_VARIANTS_PER_FAMILY for family in MLPSpec.change_families
     }
     assert len({change.change_id for change in changes}) == len(changes) == 225
     full_updates = [

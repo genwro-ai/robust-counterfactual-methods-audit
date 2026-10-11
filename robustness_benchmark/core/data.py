@@ -7,6 +7,7 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+from robustness_benchmark.core.protocol import SPLIT_SEED, SPLIT_VERSION
 from robustness_benchmark.core.schema import FeatureSchema
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -202,7 +203,7 @@ def select_adverse_indices(
 
 
 def load_dataset(
-    name: str, seed: int = 2026, split_version: str = "behavior_v3"
+    name: str, seed: int = SPLIT_SEED, split_version: str = SPLIT_VERSION
 ) -> DatasetSplit:
     """Load, encode and freeze one binary-classification benchmark dataset.
 
@@ -211,7 +212,7 @@ def load_dataset(
     standardized, with statistics from the training split.
     """
 
-    if split_version != "behavior_v3":
+    if split_version != SPLIT_VERSION:
         raise ValueError(f"Unknown split version {split_version!r}")
 
     raw = _load_raw_dataset(name)

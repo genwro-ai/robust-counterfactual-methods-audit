@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 
 import numpy as np
-import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -105,12 +104,3 @@ class FeatureSchema:
             rows[:, index] = np.round(rows[:, index] * scale + mean) - mean
             rows[:, index] /= scale
         return rows.reshape(values.shape)
-
-    def project_frame(
-        self, candidate: pd.DataFrame, factual: pd.Series
-    ) -> pd.DataFrame:
-        return pd.DataFrame(
-            self.project(candidate.to_numpy(), factual.to_numpy()),
-            columns=candidate.columns,
-            index=candidate.index,
-        )

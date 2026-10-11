@@ -27,8 +27,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from robustness_benchmark.core.classifiers import predict_crisp, predict_proba
 from robustness_benchmark.core.schema import FeatureSchema
-from robustness_benchmark.methods.base import predict_crisp, predict_proba
 from robustness_benchmark.methods.growing_spheres import growing_spheres_search
 
 ROBX_IMPLEMENTATION = "dutta2022_algorithm1_closest_of_c_k3_v2"
@@ -170,41 +170,6 @@ def tau_from_stability_quantile(
         "raw_tau": raw_tau,
         "tau": tau,
     }
-
-
-def calibrate_tau_from_training_quantile(
-    X_train: np.ndarray,
-    predict_target_proba_fn: Callable[[np.ndarray], np.ndarray],
-    *,
-    quantile: float,
-    variance: np.ndarray | float = 0.01,
-    N: int = 1_000,
-    gamma: float = 0.5,
-    seed: int = 0,
-    batch_size: int = 128,
-) -> tuple[float, dict[str, int | float]]:
-    """Calibrate RobX's threshold from favorable training-point stability.
-
-    Dutta et al. recommend choosing a dataset-dependent quantile of the
-    stability-score histogram. Calibration is performed only on points that
-    the base model assigns to the target class. No changed model is consulted.
-    """
-
-    scores, target_training_points = training_target_stability_scores(
-        X_train,
-        predict_target_proba_fn,
-        variance=variance,
-        N=N,
-        gamma=gamma,
-        seed=seed,
-        batch_size=batch_size,
-    )
-    return tau_from_stability_quantile(
-        scores,
-        quantile=quantile,
-        gamma=gamma,
-        target_training_points=target_training_points,
-    )
 
 
 def get_conservative_counterfactuals(

@@ -28,7 +28,6 @@ EMPTY = "#f0efec"  # cells without a value
 SURFACE = "white"
 
 FONT_FAMILY = "DejaVu Sans"
-SUPTITLE_SIZE = 10
 TITLE_SIZE = 9
 LABEL_SIZE = 7.5
 TICK_SIZE = 7

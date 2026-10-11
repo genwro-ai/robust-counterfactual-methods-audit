@@ -52,24 +52,29 @@ time.
 
 ## Protocol
 
-The protocol has three steps per dataset. `<dataset>` is one of
-`breast_cancer`, `diabetes`, `wine_quality`, `heloc`, `german_credit`,
-`adult`, `taiwan_default`. Every command is
-deterministic given its seeds. `full_benchmark` reuses finished runs found in
-its output directory, so an interrupted benchmark can be resumed with the same
-command.
+The protocol has three steps per dataset and model class. `<dataset>` is one
+of `breast_cancer`, `diabetes`, `wine_quality`, `heloc`, `german_credit`,
+`adult`, `taiwan_default`; `<model_type>` is one of `mlp`, `logistic`,
+`xgboost`. Every command is deterministic given its seeds. `full_benchmark`
+reuses finished runs found in its output directory, so an interrupted
+benchmark can be resumed with the same command.
+
+`scripts/run_benchmark.sh` runs all three steps for every dataset and model
+class (restrict them with `DATASETS=...` and `MODEL_TYPES=...`); re-running it
+resumes where it stopped.
 
 ### 1. Train the base models and the changed-model bank
 
 ```bash
 uv run python -m robustness_benchmark.cli.model_bank \
   --dataset <dataset> \
+  --model-type mlp \
   --epochs 300 \
   --base-architecture 32 32 \
   --base-seeds 2026 2027 2028 2029 2030 \
   --include-betarce-ensemble \
   --workers 2 \
-  --output artifacts/model_bank_<dataset>
+  --output artifacts/model_bank_<dataset>_<model_type>
 ```
 
 This freezes one stratified split (50% training, 10% reserved update pool, 10%
@@ -141,8 +146,8 @@ samples). They are stored separately and never used as evaluation models.
 
 ```bash
 uv run python -m robustness_benchmark.cli.full_benchmark \
-  --bank artifacts/model_bank_<dataset> \
-  --output artifacts/full_<dataset> \
+  --bank artifacts/model_bank_<dataset>_<model_type> \
+  --output artifacts/full_<dataset>_<model_type> \
   --n-factuals 250
 ```
 
@@ -247,8 +252,7 @@ the evaluation bank. Outputs per seed and method are written to
 
 ### 3. Aggregate the results
 
-After steps 1–2 have been completed. MLP results are read from
-`artifacts/full_<dataset>`, logistic regression and XGBoost results from
+After steps 1–2 have been completed. Results are read from
 `artifacts/full_<dataset>_<model_type>`; every dataset and model class found
 is included, and each must contain all five seeds.
 
@@ -365,9 +369,12 @@ Quick installation check on a small model (minutes, not hours):
 
 ```bash
 uv run python -m robustness_benchmark.cli.smoke \
-  --methods kdtree wachter apas rnce rbr roar_lime robx \
+  --methods kdtree wachter rbr roar_lime betarce trex growing_spheres \
   --n-factuals 5 --epochs 150 --output artifacts/smoke
 ```
+
+AP$\Delta$S, RNCE and RobX are calibrated per base model, which only
+`full_benchmark` does, so the smoke test does not offer them.
 
 `robustness_benchmark/cli/apas_betarce_pool_diagnostic.py` reproduces the appendix
 diagnostic that calibrates the AP$\Delta$S radius from a pool of

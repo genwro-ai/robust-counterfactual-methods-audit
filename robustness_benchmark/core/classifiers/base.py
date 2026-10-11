@@ -53,9 +53,6 @@ class Classifier(ABC):
         predicted = (self.predict(X).iloc[:, 0].to_numpy() >= 0.5).astype(int)
         return float(np.mean(predicted == np.asarray(y)))
 
-    def compute_accuracy(self, X: pd.DataFrame, y: pd.DataFrame | pd.Series) -> float:
-        return self.evaluate(X, y)
-
 
 def missing_capabilities(
     model_or_capabilities: object, required: Iterable[str]
@@ -67,3 +64,16 @@ def missing_capabilities(
     else:
         available = getattr(model_or_capabilities, "capabilities", frozenset())
     return set(required) - set(available)
+
+
+def predict_crisp(model: Classifier, values: np.ndarray) -> np.ndarray:
+    """Hard labels at the 0.5 threshold, as a 1-D integer array."""
+
+    probability = model.predict(np.asarray(values)).iloc[:, 0].to_numpy()
+    return (probability >= 0.5).astype(int)
+
+
+def predict_proba(model: Classifier, values: np.ndarray) -> np.ndarray:
+    """Two-column class probabilities as an array."""
+
+    return model.predict_proba(np.asarray(values)).to_numpy()

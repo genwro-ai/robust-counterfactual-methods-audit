@@ -193,9 +193,8 @@ def create_generator(
             ),
             config,
         )
-    if name in {"robx", "robx_balanced", "robx_robust"}:
-        default_tau = 0.5
-        if name != "robx" and "tau" not in config:
+    if name in {"robx_balanced", "robx_robust"}:
+        if "tau" not in config:
             raise ValueError(f"{name} requires a calibrated tau")
         _check_implementation(config, "RobX", ROBX_IMPLEMENTATION)
         config.pop("tau_quantile", None)
@@ -207,7 +206,7 @@ def create_generator(
                 task,
                 seed=int(task.training_data.seed or 0),
                 variance=_float_config(config, "variance", 0.01),
-                tau=_float_config(config, "tau", default_tau),
+                tau=_required_float_config(config, "tau"),
                 stability_samples=_int_config(config, "stability_samples", 1_000),
             ),
             config,

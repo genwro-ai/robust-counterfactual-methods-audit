@@ -11,6 +11,7 @@ from robustness_benchmark.core.model_bank import (
     select_factuals,
 )
 from robustness_benchmark.core.model_changes import parameter_linf_distance
+from robustness_benchmark.core.protocol import EVALUATION_FACTUALS_SEED_OFFSET
 from robustness_benchmark.core.provenance import load_model_checkpoint, write_json
 from robustness_benchmark.evaluation.aggregate import (
     aggregate_survival,
@@ -141,7 +142,7 @@ def main() -> None:
         raise ValueError(f"Base seeds are not in the model bank: {unknown_seeds}")
     data = load_dataset(
         str(manifest["dataset"]),
-        seed=int(manifest.get("split_seed", 2026)),
+        seed=int(manifest["split_seed"]),
         split_version=str(manifest["split_version"]),
     )
 
@@ -172,7 +173,7 @@ def main() -> None:
             base_model,
             data.X_test,
             args.n_factuals,
-            seed=base_seed + 30_000,
+            seed=base_seed + EVALUATION_FACTUALS_SEED_OFFSET,
         )
         task = make_task(
             base_model,

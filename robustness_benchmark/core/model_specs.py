@@ -595,11 +595,6 @@ def spec_from_dict(values: dict[str, Any]) -> ModelSpec:
 
 
 def spec_from_manifest(manifest: dict[str, Any]) -> ModelSpec:
-    """Rebuild a bank's spec; banks without ``model_spec`` are MLP banks."""
+    """Rebuild the spec a bank's models were trained with."""
 
-    if "model_spec" in manifest:
-        return spec_from_dict(manifest["model_spec"])
-    return MLPSpec(
-        hidden_dim=tuple(int(width) for width in manifest["selected_architecture"]),
-        epochs=int(manifest["epochs"]),
-    )
+    return spec_from_dict(manifest["model_spec"])

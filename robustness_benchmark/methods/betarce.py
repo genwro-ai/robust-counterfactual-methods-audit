@@ -14,8 +14,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from robustness_benchmark.core.classifiers import predict_crisp
 from robustness_benchmark.core.schema import FeatureSchema
-from robustness_benchmark.methods.base import predict_crisp
 from robustness_benchmark.methods.growing_spheres import growing_spheres_search
 
 BETARCE_IMPLEMENTATION = "paper_two_stage_growing_spheres_base100_v4"

@@ -16,41 +16,19 @@ def generation_metrics(group: pd.DataFrame) -> dict[str, int | float | None]:
     requested_n = len(group)
     generated_n = int(generated.sum())
     base_valid_n = int(group["base_valid"].sum())
-    # Runs predating the column have no pre-projection validity.
-    raw_valid = group.get("base_valid_before_projection")
-    raw_valid_n = None if raw_valid is None else int(raw_valid.eq(True).sum())
+    raw_valid_n = int(group["base_valid_before_projection"].eq(True).sum())
     return {
         "requested_n": requested_n,
         "generated_n": generated_n,
         "generation_coverage": _ratio(generated_n, requested_n),
         "base_valid_n": base_valid_n,
         "validity_given_generated": _ratio(base_valid_n, generated_n),
-        "validity_before_projection_given_generated": (
-            None if raw_valid_n is None else _ratio(raw_valid_n, generated_n)
-        ),
+        "validity_before_projection_given_generated": _ratio(raw_valid_n, generated_n),
         "end_to_end_validity": _ratio(base_valid_n, requested_n),
     }
 
 
-def normalize_survival_schema(survival: pd.DataFrame) -> pd.DataFrame:
-    """Rename the legacy field that conflated base validity with generation."""
-
-    normalized = survival.copy()
-    if "base_valid" not in normalized:
-        if "generation_eligible" not in normalized:
-            raise ValueError("Survival rows must include base_valid")
-        normalized = normalized.rename(columns={"generation_eligible": "base_valid"})
-    elif "generation_eligible" in normalized:
-        current = normalized["base_valid"].astype("boolean")
-        legacy = normalized["generation_eligible"].astype("boolean")
-        normalized["base_valid"] = current.combine_first(legacy)
-        normalized = normalized.drop(columns="generation_eligible")
-    normalized["base_valid"] = normalized["base_valid"].astype(bool)
-    return normalized
-
-
 def aggregate_survival(survival: pd.DataFrame) -> list[dict[str, object]]:
-    survival = normalize_survival_schema(survival)
     rows: list[dict[str, object]] = []
     keys = ["method", "change_family"]
     for values, group in survival.groupby(keys, sort=True):
@@ -156,7 +134,6 @@ def generation_summary(generation: pd.DataFrame) -> list[dict[str, object]]:
 def survival_summary(survival: pd.DataFrame) -> list[dict[str, object]]:
     """Summarize survival without conflating validity and coverage."""
 
-    survival = normalize_survival_schema(survival)
     rows: list[dict[str, object]] = []
     keys = ["base_model_id", "method", "change_id", "change_family", "change_level"]
     for values, group in survival.groupby(keys, sort=True, dropna=False):

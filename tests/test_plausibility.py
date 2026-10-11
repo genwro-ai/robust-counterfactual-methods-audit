@@ -126,6 +126,7 @@ def write_runs(output, generation_columns: dict) -> None:
             **common,
             "generation_status": ["success", "base_invalid"],
             "base_valid": [True, False],
+            "base_valid_before_projection": [True, False],
             "runtime_seconds": [1.0, 2.0],
             "gower_distance": [0.5, None],
             "method_config": ["{}"] * 2,

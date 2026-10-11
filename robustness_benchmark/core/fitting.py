@@ -4,11 +4,10 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import balanced_accuracy_score, log_loss
 
-from robustness_benchmark.core.classifiers import Classifier, TorchBinaryModel
+from robustness_benchmark.core.classifiers import Classifier
 from robustness_benchmark.core.data import DatasetSplit
-from robustness_benchmark.core.model_specs import MLPSpec, ModelSpec
-
-SELECTION_DEV_SEEDS = (2026, 2027, 2028)
+from robustness_benchmark.core.model_specs import ModelSpec
+from robustness_benchmark.core.protocol import SELECTION_DEV_SEEDS
 
 
 def fit_spec(
@@ -23,34 +22,6 @@ def fit_spec(
     """Single construction point for every trained model in the bank."""
 
     return spec.fit(X_train, y_train, X_val, y_val, seed=seed)
-
-
-def fit_model(
-    X_train: pd.DataFrame,
-    y_train: pd.Series,
-    X_val: pd.DataFrame,
-    y_val: pd.Series,
-    *,
-    seed: int,
-    hidden_dim: tuple[int, ...] = (16, 16),
-    epochs: int = 300,
-    learning_rate: float = 1e-3,
-    weight_decay: float = 0.0,
-    optimizer_name: str = "adam",
-    patience: int = 30,
-) -> TorchBinaryModel:
-    spec = MLPSpec(
-        hidden_dim=hidden_dim,
-        epochs=epochs,
-        learning_rate=learning_rate,
-        weight_decay=weight_decay,
-        optimizer_name=optimizer_name,
-        patience=patience,
-    )
-    model = fit_spec(spec, X_train, y_train, X_val, y_val, seed=seed)
-    if not isinstance(model, TorchBinaryModel):
-        raise TypeError("an MLP spec must produce a TorchBinaryModel")
-    return model
 
 
 def select_base_spec(

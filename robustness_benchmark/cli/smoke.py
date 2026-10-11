@@ -7,13 +7,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from robustness_benchmark.core.data import load_dataset, select_adverse_indices
-from robustness_benchmark.core.fitting import fit_model
+from robustness_benchmark.core.classifiers import MODEL_CLASSES
+from robustness_benchmark.core.data import load_dataset
+from robustness_benchmark.core.fitting import fit_spec
+from robustness_benchmark.core.model_bank import select_factuals
 from robustness_benchmark.core.model_changes import (
     BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
     make_betarce_generation_ensemble,
     make_changed_models,
 )
+from robustness_benchmark.core.model_specs import MLPSpec
+from robustness_benchmark.core.protocol import EVALUATION_FACTUALS_SEED_OFFSET
 from robustness_benchmark.core.provenance import (
     file_sha256,
     row_id_value,
@@ -25,13 +29,30 @@ from robustness_benchmark.evaluation.aggregate import (
     survival_summary,
 )
 from robustness_benchmark.evaluation.robustness import evaluate_survival
+from robustness_benchmark.methods.configuration import (
+    LOCKED_CONFIGS,
+    METHODS,
+    unsupported_methods,
+)
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
+
+# APΔS, RNCE and RobX need per-base-model calibration, which only
+# full_benchmark performs; ROAR needs a linear model.
+CALIBRATED_METHODS = {"apas", "rnce", "robx_balanced", "robx_robust"}
+SMOKE_METHODS = tuple(
+    method
+    for method in METHODS
+    if method not in CALIBRATED_METHODS
+    and method not in unsupported_methods([method], MODEL_CLASSES["mlp"].capabilities)
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="breast_cancer")
-    parser.add_argument("--methods", nargs="+", default=["kdtree", "wachter"])
+    parser.add_argument(
+        "--methods", nargs="+", choices=SMOKE_METHODS, default=["kdtree", "wachter"]
+    )
     parser.add_argument("--n-factuals", type=int, default=5)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--seed", type=int, default=2026)
@@ -42,50 +63,31 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     data = load_dataset(args.dataset, seed=args.seed)
-    model = fit_model(
-        data.X_train,
-        data.y_train,
-        data.X_val,
-        data.y_val,
-        seed=args.seed,
-        epochs=args.epochs,
+    spec = MLPSpec(hidden_dim=(16, 16), epochs=args.epochs)
+    model = fit_spec(
+        spec, data.X_train, data.y_train, data.X_val, data.y_val, seed=args.seed
     )
-    test_probability = model.predict(data.X_test).iloc[:, 0]
-    test_probability.index = data.X_test.index
-    adverse_indices = select_adverse_indices(
-        test_probability,
-        requested=args.n_factuals,
-        seed=args.seed + 30_000,
-    )
-    factuals = data.X_test.loc[adverse_indices].reset_index(drop=True)
-    factual_ids = list(range(len(factuals)))
-    dataset_row_ids: list[int | str] = [
-        row_id_value(value) for value in adverse_indices.tolist()
-    ]
-
-    changes = make_changed_models(
-        data,
+    factuals, factual_ids, dataset_row_ids = select_factuals(
         model,
-        base_seed=args.seed,
-        epochs=args.epochs,
-        hidden_dim=(16, 16),
-        profile="smoke",
+        data.X_test,
+        args.n_factuals,
+        seed=args.seed + EVALUATION_FACTUALS_SEED_OFFSET,
+    )
+    changes = make_changed_models(
+        data, model, base_seed=args.seed, spec=spec, profile="smoke"
     )
     generation_models = (
-        make_betarce_generation_ensemble(
-            data,
-            base_seed=args.seed,
-            hidden_dim=(16, 16),
-            epochs=args.epochs,
-        )
+        make_betarce_generation_ensemble(data, base_seed=args.seed, spec=spec)
         if "betarce" in args.methods
         else None
     )
-    base_model_id = f"{args.dataset}:mlp_16_16:seed_{args.seed}"
+    base_model_id = f"{args.dataset}:{spec.id_fragment()}:seed_{args.seed}"
     generation_rows: list[dict[str, object]] = []
     survival_rows: list[dict[str, object]] = []
     ce_tables: list[pd.DataFrame] = []
-    task = make_task(model, data.X_train, data.y_train, seed=args.seed)
+    task = make_task(
+        model, data.X_train, data.y_train, seed=args.seed, schema=data.feature_schema
+    )
 
     for method in args.methods:
         counterfactuals, method_generation = generate_counterfactuals(
@@ -95,6 +97,7 @@ def main() -> None:
             factual_ids=factual_ids,
             dataset_row_ids=dataset_row_ids,
             generation_models=generation_models,
+            method_config=dict(LOCKED_CONFIGS.get(method, {})),
         )
         for row in method_generation:
             row["base_model_id"] = base_model_id
@@ -216,7 +219,7 @@ def main() -> None:
         "epochs": args.epochs,
         "requested_n_factuals": args.n_factuals,
         "actual_n_factuals": len(factuals),
-        "available_adverse_n": int((test_probability < 0.5).sum()),
+        "available_adverse_n": int((model.predict(data.X_test).iloc[:, 0] < 0.5).sum()),
         "methods": args.methods,
         "base_test_accuracy": model.evaluate(data.X_test, data.y_test),
         "behavior_reference_split": "test",

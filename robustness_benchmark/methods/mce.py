@@ -17,7 +17,6 @@ class MCE(CEGenerator):
 
     Attributes:
         _task (Task): The task to solve, inherited from CEGenerator.
-        __customFunc (callable, optional): A custom distance function, inherited from CEGenerator.
         opt (OptSolver): An optimizer instance for setting up and solving the MILP problem.
     """
 

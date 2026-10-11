@@ -12,6 +12,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from matplotlib.lines import Line2D
 
+from robustness_benchmark.core.protocol import BASE_SEEDS, result_dir
 from robustness_benchmark.evaluation.aggregate import (
     aggregate_survival,
     generation_metrics,
@@ -177,30 +178,16 @@ def method_label(method: str) -> str:
     return method_style(method).label
 
 
-def result_root(artifacts: Path, dataset: str, model_type: str) -> Path:
-    """MLP results keep the paper's ``full_<dataset>`` directory."""
-
-    legacy = artifacts / f"full_{dataset}"
-    if model_type == "mlp" and legacy.is_dir():
-        return legacy
-    return artifacts / f"full_{dataset}_{model_type}"
-
-
 def discover_runs(artifacts: Path) -> list[tuple[str, str, Path]]:
     """Return (dataset, model type, result root) for every benchmark present."""
 
     runs = []
     for model_type in MODEL_TYPES:
         for dataset in DATASETS:
-            root = result_root(artifacts, dataset, model_type)
+            root = result_dir(artifacts, dataset, model_type)
             if not root.is_dir():
                 continue
-            summary = root / "summary.json"
-            recorded = (
-                json.loads(summary.read_text()).get("model_type", "mlp")
-                if summary.is_file()
-                else "mlp"
-            )
+            recorded = json.loads((root / "summary.json").read_text())["model_type"]
             if recorded != model_type:
                 raise RuntimeError(f"{root} holds {recorded} results, not {model_type}")
             runs.append((dataset, model_type, root))
@@ -219,7 +206,7 @@ def parse_args() -> argparse.Namespace:
 def load_dataset_results(root: Path, dataset: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     generation = pd.read_parquet(root / "generation.parquet")
     survival = pd.read_parquet(root / "survival.parquet")
-    expected_seeds = {2026, 2027, 2028, 2029, 2030}
+    expected_seeds = set(BASE_SEEDS)
     generation_seeds = {
         int(value.rsplit("_", maxsplit=1)[-1])
         for value in generation["base_model_id"].unique()
@@ -230,7 +217,7 @@ def load_dataset_results(root: Path, dataset: str) -> tuple[pd.DataFrame, pd.Dat
     }
     if generation_seeds != expected_seeds or survival_seeds != expected_seeds:
         raise RuntimeError(
-            f"{root} does not contain the expected five seeds: "
+            f"{root} does not contain the expected seeds {sorted(expected_seeds)}: "
             f"generation={sorted(generation_seeds)}, "
             f"survival={sorted(survival_seeds)}"
         )
@@ -458,7 +445,6 @@ def seed_summary(seeds: pd.DataFrame) -> pd.DataFrame:
         "mean_gower_distance",
         *QUALITY_SUMMARY_COLUMNS,
     )
-    metrics = tuple(metric for metric in metrics if metric in seeds)  # older runs
     rows = []
     for (dataset, model_type), dataset_group in seeds.groupby(
         ["dataset", "model_type"], sort=True
@@ -1081,14 +1067,9 @@ def plot_tradeoff(
 
 
 def plot_plausibility(output: Path, overall: pd.DataFrame, model_type: str) -> None:
-    """Robustness against distance to the target-class data.
-
-    Runs that predate the plausibility metrics have no values and are skipped.
-    """
+    """Robustness against distance to the target-class data."""
 
     x_column = "mean_knn_distance_relative"
-    if x_column not in overall:
-        return
     recorded = overall.assign(
         **{x_column: pd.to_numeric(overall[x_column], errors="coerce")}
     )

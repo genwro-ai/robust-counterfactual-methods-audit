@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from robustness_benchmark.core.protocol import STABILITY_TAU_SEED_OFFSET
 from robustness_benchmark.methods.robx import (
     tau_from_stability_quantile,
     training_target_stability_scores,
@@ -36,7 +37,6 @@ from robustness_benchmark.methods.robx import (
 from robustness_benchmark.methods.wachter import WACHTER_DEFAULTS, Wachter
 
 TREX_IMPLEMENTATION = "hamman2023_trex_i_robx_stability_v2"
-TAU_CALIBRATION_SEED_OFFSET = 81_000
 
 
 def target_stability(model, x: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
@@ -134,7 +134,7 @@ class TRexAdapter:
             lambda values: self.model.predict_proba(values).iloc[:, 1].to_numpy(),
             variance=variance,
             N=stability_samples,
-            seed=seed + TAU_CALIBRATION_SEED_OFFSET,
+            seed=seed + STABILITY_TAU_SEED_OFFSET,
         )
         self.tau, self.tau_calibration = tau_from_stability_quantile(
             scores, quantile=tau_quantile, target_training_points=target_points
