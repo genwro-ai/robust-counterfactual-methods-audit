@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.core.classifiers import Classifier, classifier_from_payload
 
 
 def json_value(value: Any) -> Any:
@@ -57,6 +57,7 @@ def environment_info() -> dict[str, object]:
         "pyarrow",
         "scikit-learn",
         "torch",
+        "xgboost",
     ]
     versions = {}
     for package in packages:
@@ -72,7 +73,7 @@ def environment_info() -> dict[str, object]:
 
 
 def save_model_checkpoint(
-    model: TorchBinaryModel,
+    model: Classifier,
     model_id: str,
     path: Path,
     metadata: Mapping[str, Any] | None = None,
@@ -80,30 +81,20 @@ def save_model_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
+            "model_type": model.model_type,
             "model_id": model_id,
-            "input_dim": model.input_dim,
-            "hidden_dim": model.hidden_dim,
-            "output_dim": model.output_dim,
-            "seed": model.seed,
             "metadata": dict(metadata or {}),
-            "state_dict": model.get_torch_model().state_dict(),
+            **model.checkpoint_payload(),
         },
         path,
     )
 
 
-def load_model_checkpoint(path: Path) -> tuple[TorchBinaryModel, dict[str, Any]]:
+def load_model_checkpoint(path: Path) -> tuple[Classifier, dict[str, Any]]:
     """Restore a saved model variant and return its complete checkpoint payload."""
 
     payload: dict[str, Any] = torch.load(path, map_location="cpu", weights_only=True)
-    model = TorchBinaryModel(
-        input_dim=int(payload["input_dim"]),
-        hidden_dim=tuple(int(width) for width in payload["hidden_dim"]),
-        seed=int(payload["seed"]),
-    )
-    model.get_torch_model().load_state_dict(payload["state_dict"])
-    model.get_torch_model().eval()
-    return model, payload
+    return classifier_from_payload(payload), payload
 
 
 def file_sha256(path: Path) -> str:

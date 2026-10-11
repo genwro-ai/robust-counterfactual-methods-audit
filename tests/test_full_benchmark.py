@@ -64,7 +64,7 @@ def test_missing_cost_ranks_below_any_finite_cost_at_equal_validity():
 
 
 def test_robustness_defining_parameters_are_not_grid_tuned():
-    assert set(TUNING_GRIDS) == {"wachter", "roar_lime"}
+    assert set(TUNING_GRIDS) == {"wachter", "roar_lime", "roar"}
     roar_delta = {candidate["delta"] for candidate in TUNING_GRIDS["roar_lime"]}
     roar_sample_counts = {
         candidate["num_samples"] for candidate in TUNING_GRIDS["roar_lime"]

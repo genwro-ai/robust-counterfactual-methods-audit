@@ -1,6 +1,7 @@
 from collections.abc import Callable
 
 import numpy as np
+import pandas as pd
 
 
 def hyper_sphere_coordinates(
@@ -98,3 +99,64 @@ def growing_spheres_search(
         high = low + step
 
     return None
+
+
+class GrowingSpheresAdapter:
+    """Non-robust growing spheres with BetaRCE's base-search settings.
+
+    A candidate qualifies once the base model gives the target class at least
+    ``target_probability``. At 0.5 this is plain growing spheres; higher values
+    are confidence-margin baselines that trace the robustness-distance frontier
+    a robust method has to beat.
+    """
+
+    def __init__(
+        self,
+        task,
+        *,
+        seed: int,
+        target_probability: float = 0.5,
+        n_search_samples: int = 100,
+        p_norm: int = 2,
+        step: float = 0.1,
+        max_iter: int = 200,
+    ) -> None:
+        if not 0.5 <= target_probability < 1.0:
+            raise ValueError("target_probability must lie in [0.5, 1)")
+        self.model = task.model
+        self.target_probability = target_probability
+        self.n_search_samples = n_search_samples
+        self.p_norm = p_norm
+        self.step = step
+        self.max_iter = max_iter
+        self.rng = np.random.default_rng(seed)
+        self.last_metadata: dict[str, object] = {}
+
+    def generate_for_instance(
+        self, factual: pd.Series, *, neg_value: int = 0, **_kwargs: object
+    ) -> pd.DataFrame:
+        target = 1 - neg_value
+
+        def qualifies(values: np.ndarray) -> np.ndarray:
+            probability = self.model.predict(values).iloc[:, 0].to_numpy()
+            if target == 0:
+                probability = 1.0 - probability
+            return (probability >= self.target_probability).astype(int)
+
+        counterfactual = growing_spheres_search(
+            factual.to_numpy(dtype=float),
+            pred_fn_crisp=qualifies,
+            target_class=1,
+            n_search_samples=self.n_search_samples,
+            p_norm=self.p_norm,
+            step=self.step,
+            max_iter=self.max_iter,
+            rng=self.rng,
+        )
+        self.last_metadata = {
+            "status": "ok" if counterfactual is not None else "not_found",
+            "target_probability": self.target_probability,
+        }
+        if counterfactual is None:
+            return pd.DataFrame(columns=factual.index)
+        return pd.DataFrame([counterfactual], columns=factual.index)

@@ -102,3 +102,26 @@ def test_rnce_rejects_unknown_interval_encoding():
         generator.generate_for_instance(X.iloc[0], **kwargs)
 
     assert RNCE_INTERVAL_ENCODING == "sign_aware_first_layer_v2"
+
+
+def test_logistic_interval_bound_matches_closed_form_on_negative_inputs():
+    # Without a hidden layer the output layer reads the inputs directly. The
+    # worst case over |dw| <= delta, |db| <= bias_delta is
+    # w.x + b - delta * ||x||_1 - bias_delta.
+    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    linear = model.get_torch_model()[0]
+    with torch.no_grad():
+        linear.weight.copy_(torch.tensor([[1.0, -2.0]]))
+        linear.bias.fill_(0.5)
+    X = pd.DataFrame({"a": [2.0], "b": [-0.5]})
+    task = make_task(model, X, pd.Series([1]), seed=0)
+    evaluator = DeltaRobustnessEvaluator(task)
+
+    robust = evaluator.evaluate(X.iloc[0], desired_output=1, delta=0.5, bias_delta=0.1)
+
+    assert evaluator.opt.gurobiModel.status == GRB.OPTIMAL
+    assert evaluator.opt.outputNode.X == pytest.approx(3.5 - 0.5 * 2.5 - 0.1)
+    assert robust is True
+    assert minimum_pgd_logit(
+        model, X.iloc[0].to_numpy(), delta=0.5, bias_delta=0.1
+    ) == pytest.approx(2.15, abs=1e-4)

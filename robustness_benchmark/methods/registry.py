@@ -6,16 +6,30 @@ from tqdm.auto import tqdm
 
 from robustness_benchmark.core.task import ClassificationTask, FrameDataset
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION, APASAdapter
+from robustness_benchmark.methods.configuration import (
+    GROWING_SPHERES_TARGETS,
+    unsupported_methods,
+)
+from robustness_benchmark.methods.growing_spheres import GrowingSpheresAdapter
 from robustness_benchmark.methods.kdtree import KDTreeNNCE
 from robustness_benchmark.methods.rbr import RBRAdapter
 from robustness_benchmark.methods.rnce import RNCE
-from robustness_benchmark.methods.roar_lime import ROAR_LIME_IMPLEMENTATION, RoarLimeAdapter
+from robustness_benchmark.methods.roar import ROAR_IMPLEMENTATION, RoarAdapter
+from robustness_benchmark.methods.roar_lime import (
+    ROAR_LIME_IMPLEMENTATION,
+    RoarLimeAdapter,
+)
 from robustness_benchmark.methods.robust_adapters import BetaRCEAdapter, RobXAdapter
-from robustness_benchmark.methods.wachter import Wachter
+from robustness_benchmark.methods.trex import TREX_IMPLEMENTATION, TRexAdapter
+from robustness_benchmark.methods.wachter import WACHTER_DEFAULTS, Wachter
 
 
 class NoCounterfactualFound(Exception):
     """A generator completed normally but found no qualifying counterfactual."""
+
+
+class UnsupportedModelError(ValueError):
+    """A method cannot run on the model class it was asked to explain."""
 
 
 def _float_config(config: dict[str, object], key: str, default: float) -> float:
@@ -38,6 +52,15 @@ def _int_config(config: dict[str, object], key: str, default: int) -> int:
     return value
 
 
+def _check_implementation(config: dict[str, object], name: str, expected: str) -> None:
+    implementation = config.pop("implementation", expected)
+    if implementation != expected:
+        raise ValueError(
+            f"Unsupported {name} implementation {implementation!r}; "
+            f"expected {expected!r}"
+        )
+
+
 def make_task(model, X_train: pd.DataFrame, y_train: pd.Series, seed: int):
     return ClassificationTask(model, FrameDataset(X_train, y_train, seed=seed))
 
@@ -49,26 +72,20 @@ def create_generator(
     method_config: dict[str, object] | None = None,
 ):
     config = dict(method_config or {})
+    unsupported = unsupported_methods([name], task.model)
+    if unsupported:
+        raise UnsupportedModelError(
+            f"{name} cannot explain a {getattr(task.model, 'model_type', '?')} "
+            f"model: it {unsupported[name]}"
+        )
     if name == "kdtree":
         return KDTreeNNCE(task), config
     if name == "wachter":
-        defaults = {
-            "max_allowed_minutes": 0.05,
-            "max_iter": 20_000,
-            "lr": 0.02,
-            "lamb": 0.1,
-        }
-        defaults.update(config)
-        return Wachter(task), defaults
+        return Wachter(task), {**WACHTER_DEFAULTS, **config}
     if name == "rnce":
         return RNCE(task), config
     if name == "apas":
-        implementation = config.pop("implementation", APAS_IMPLEMENTATION)
-        if implementation != APAS_IMPLEMENTATION:
-            raise ValueError(
-                f"Unsupported APAS implementation {implementation!r}; "
-                f"expected {APAS_IMPLEMENTATION!r}"
-            )
+        _check_implementation(config, "APAS", APAS_IMPLEMENTATION)
         return (
             APASAdapter(
                 task,
@@ -104,12 +121,7 @@ def create_generator(
             config,
         )
     if name == "roar_lime":
-        implementation = config.pop("implementation", ROAR_LIME_IMPLEMENTATION)
-        if implementation != ROAR_LIME_IMPLEMENTATION:
-            raise ValueError(
-                f"Unsupported ROAR-LIME implementation {implementation!r}; "
-                f"expected {ROAR_LIME_IMPLEMENTATION!r}"
-            )
+        _check_implementation(config, "ROAR-LIME", ROAR_LIME_IMPLEMENTATION)
         return (
             RoarLimeAdapter(
                 task,
@@ -120,6 +132,50 @@ def create_generator(
                 learning_rate=_float_config(config, "lr", 0.001),
                 loss_threshold=_float_config(config, "loss_threshold", 0.0001),
                 maximum_iterations=_int_config(config, "maximum_iterations", 20_000),
+            ),
+            config,
+        )
+    if name == "roar":
+        _check_implementation(config, "ROAR", ROAR_IMPLEMENTATION)
+        return (
+            RoarAdapter(
+                task,
+                delta=_float_config(config, "delta", 0.1),
+                lambda_param=_float_config(config, "lambda_param", 0.01),
+                learning_rate=_float_config(config, "lr", 0.001),
+                loss_threshold=_float_config(config, "loss_threshold", 0.0001),
+                maximum_iterations=_int_config(config, "maximum_iterations", 20_000),
+            ),
+            config,
+        )
+    if name == "trex":
+        _check_implementation(config, "T:Rex", TREX_IMPLEMENTATION)
+        config.pop("tau_calibration", None)
+        return (
+            TRexAdapter(
+                task,
+                seed=int(task.training_data.seed or 0),
+                variance=_float_config(config, "variance", 0.01),
+                stability_samples=_int_config(config, "stability_samples", 1_000),
+                tau_quantile=_float_config(config, "tau_quantile", 0.5),
+                step_size=_float_config(config, "step_size", 0.01),
+                max_steps=_int_config(config, "max_steps", 200),
+                trust_radius=_float_config(config, "trust_radius", 1.0),
+            ),
+            config,
+        )
+    if name in GROWING_SPHERES_TARGETS:
+        return (
+            GrowingSpheresAdapter(
+                task,
+                seed=int(task.training_data.seed or 0),
+                target_probability=_float_config(
+                    config, "target_probability", GROWING_SPHERES_TARGETS[name]
+                ),
+                n_search_samples=_int_config(config, "n_search_samples", 100),
+                p_norm=_int_config(config, "p_norm", 2),
+                step=_float_config(config, "step", 0.1),
+                max_iter=_int_config(config, "max_iter", 200),
             ),
             config,
         )

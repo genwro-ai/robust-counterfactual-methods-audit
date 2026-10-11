@@ -8,6 +8,13 @@ from torch.optim import Adam
 
 from robustness_benchmark.methods.ce_generator import CEGenerator
 
+WACHTER_DEFAULTS: dict[str, object] = {
+    "max_allowed_minutes": 0.05,
+    "max_iter": 20_000,
+    "lr": 0.02,
+    "lamb": 0.1,
+}
+
 
 class CostLoss(nn.Module):
     """

@@ -27,8 +27,10 @@ time.
 
 ## Repository layout
 
-- `robustness_benchmark/core/`: datasets and the frozen split, MLP training, the
-  model-change bank, checkpoints and provenance
+- `robustness_benchmark/core/`: datasets and the frozen split, the classifiers
+  (`classifiers/`: MLP, logistic regression, XGBoost), per-class training and
+  change rules (`model_specs.py`), the model-change bank, checkpoints and
+  provenance
 - `robustness_benchmark/methods/`: CFE implementations, adapters, method
   configuration, and AP$\Delta$S radius calibration
 - `robustness_benchmark/evaluation/`: robustness metrics and aggregation
@@ -67,7 +69,7 @@ validation cross-entropy with patience 30). The five runs differ only in
 initialization seed.
 
 For every base model it then trains and saves 25 held-out variants in each of
-eight change families (200 per base model, 1,000 per dataset):
+nine change families (225 per base model, 1,125 per dataset):
 
 | Family | Construction |
 |---|---|
@@ -79,12 +81,35 @@ eight change families (200 per base model, 1,000 per dataset):
 | Training configuration | 19 Adam and 6 SGD learning-rate/weight-decay settings |
 | Architecture | 25 alternative widths and depths |
 | Parameter perturbation | $\ell_\infty$ radii {0.001, 0.005, 0.01, 0.02, 0.05}, five random directions each |
+| Incremental update | one mini-batch Adam pass (batch 8, lr $10^{-3}$) from the base checkpoint over 25%, 50%, 75%, 100% of the update pool (8/8/8/1) |
 
 All families except *new initialization* reuse the base model's
 initialization seed. Every variant is evaluated; the 3-point
 balanced-accuracy flag stored in the catalog is descriptive only. Each variant
 is described by its hard-prediction disagreement and mean absolute probability
 difference from the base model on the test set.
+
+#### Logistic regression and XGBoost
+
+`--model-type logistic` or `--model-type xgboost` builds the same bank for
+another model class (`--epochs` and `--base-architecture` apply to the MLP
+only). The base configuration is selected once per dataset on the validation
+split: the simplest grid setting within 0.01 of the best mean balanced accuracy
+over three development seeds (`base_config_selection.json`). Families adapt to
+the model class:
+
+| Family | Logistic regression | XGBoost |
+|---|---|---|
+| New initialization | not applicable (deterministic fit) | 25 seeds; row and column subsampling 0.8 |
+| Training configuration | C multipliers with L2, L1, elastic-net and class-balanced fits | learning rate, `reg_lambda`, `min_child_weight`, `gamma`, `reg_alpha`, `subsample` |
+| Architecture | not applicable | 25 nearest (`max_depth`, `n_estimators`) alternatives |
+| Parameter perturbation | coefficients and intercept | leaf values |
+| Incremental update | Adam pass through the linear torch view | 10% more trees fitted on the pool subset |
+
+Bootstrap, deletion, data addition, and label update are constructed exactly as
+for the MLP. `full_benchmark` skips methods the bank's model class cannot serve
+(Wachter, RNCE, and AP$\Delta$S on XGBoost) and lists them under
+`skipped_methods` in `summary.json`.
 
 `--include-betarce-ensemble` additionally trains the 32 bootstrap models that
 BetaRCE uses during generation (base initialization, different bootstrap
@@ -96,13 +121,14 @@ samples). They are stored separately and never used as evaluation models.
 uv run python -m robustness_benchmark.cli.full_benchmark \
   --bank artifacts/model_bank_<dataset> \
   --output artifacts/full_<dataset> \
-  --methods kdtree wachter apas rnce rbr roar_lime robx_balanced robx_robust betarce \
   --n-factuals 250
 ```
 
-For each base model, up to 250 test instances that it predicts as adverse are
-selected (all available instances on Breast Cancer and Diabetes). Every method
-generates one CFE per factual, and each CFE is then scored on all 200 variants.
+Without `--methods`, every method in `configuration.METHODS` runs; methods the
+bank's model class cannot serve are skipped. For each base model, up to 250
+test instances that it predicts as adverse are selected (all available
+instances on Breast Cancer and Diabetes). Every method generates one CFE per
+factual, and each CFE is then scored on every variant in the bank.
 
 Method settings (`robustness_benchmark/methods/configuration.py`):
 
@@ -134,6 +160,24 @@ Method settings (`robustness_benchmark/methods/configuration.py`):
 - **BetaRCE**: growing-spheres base CFE followed by a second growing-spheres
   search that enforces the Beta lower bound ($\delta=0.9$, confidence 0.95)
   over the 32-model ensemble.
+- **T:Rex** (Hamman et al., 2023; MLP and logistic regression): from a Wachter
+  CFE, gradient ascent on RobX's stability score (variance 0.01, 1,000
+  samples) until it reaches the `robx_balanced` threshold or 200 steps of size
+  0.01 are used, within an $\ell_2$ ball of radius 1 around the start; steps,
+  ball and box are in min-max-scaled units as in the reference code. It is the
+  gradient-search counterpart of RobX's heuristic search.
+- **ROAR** (logistic regression only): the ROAR objective on the model's own
+  coefficients and intercept instead of a LIME surrogate, with ROAR-LIME's
+  $\delta$ and tuning grid.
+- **Growing spheres**: the non-robust baseline on every model class, with
+  BetaRCE's base-search settings.
+- **Confidence-margin baselines** (`gs_margin_60` to `gs_margin_90`): growing
+  spheres that accept a candidate only once the base model's favorable-class
+  probability reaches 0.6 to 0.9; they trace the robustness–distance frontier
+  a robust method has to beat.
+
+Wachter, RNCE, AP$\Delta$S, and T:Rex need gradients or network weights and do
+not run on XGBoost; ROAR needs a linear model.
 
 Calibration models, the BetaRCE ensemble, and tuning data are never part of
 the evaluation bank. Outputs per seed and method are written to
@@ -141,9 +185,12 @@ the evaluation bank. Outputs per seed and method are written to
 `generation`, `survival`), with `tuning.json`, `calibration/`, and a
 `summary.json` at the top level.
 
-### 3. Aggregate the four datasets
+### 3. Aggregate the results
 
-After steps 1–2 have been completed for all four datasets:
+After steps 1–2 have been completed. MLP results are read from
+`artifacts/full_<dataset>`, logistic regression and XGBoost results from
+`artifacts/full_<dataset>_<model_type>`; every dataset and model class found
+is included, and each must contain all five seeds.
 
 ```bash
 uv run python -m robustness_benchmark.cli.results_packet \
@@ -152,9 +199,13 @@ uv run python -m robustness_benchmark.cli.results_packet \
 ```
 
 This writes `overall_metrics.csv`, `change_family_metrics.csv`,
-`seed_metrics.csv`, `seed_bootstrap_intervals.csv`, the paper figures
-(`paper_robustness_by_change_family.pdf`,
-`paper_robustness_proximity_tradeoff.pdf`), and `results_brief.md`.
+`seed_metrics.csv`, `seed_summary.csv` (all with a `model_type` column),
+`method_availability.md` (which methods ran on which model class), the paper
+figures per model class (`paper_robustness_by_change_family_<model_type>.pdf`,
+`paper_robustness_proximity_tradeoff_<model_type>.pdf`), and
+`results_brief.md`. Methods a model class cannot serve appear as n/a; the
+confidence-margin baselines are drawn as one dashed curve in the trade-off
+plots.
 
 ## Metrics
 
@@ -172,7 +223,22 @@ This writes `overall_metrics.csv`, `change_family_metrics.csv`,
   each divided by the feature's training median absolute deviation (standard
   deviation when the MAD is zero).
 
-Each metric is also computed per base model; the results packet reports the
+- **Sparsity**: number (and fraction) of features changed by more than
+  $10^{-6}$.
+- **Plausibility**, all computed from the base model and training data only:
+  - *kNN distance*: mean distance, scaled as for proximity, to the five
+    nearest training points the base model predicts as the target class;
+    `knn_distance_relative` divides it by the median leave-one-out kNN
+    distance of those points, so values near 1 are as typical as real
+    target-class data.
+  - *LOF*: local outlier factor (20 neighbours, novelty mode) fitted on the
+    same target-class points; reported as a score (about 1 is typical) and an
+    inlier rate.
+  - *yNN* (Pawelczyk et al., 2021): fraction of the five nearest training
+    points, of any class, that the base model labels as the target class.
+
+Sparsity and plausibility are averaged over base-valid CFEs. Each metric is
+also computed per base model; the results packet reports the
 mean and standard deviation over the five base models (`seed_summary.csv`).
 
 ## Datasets

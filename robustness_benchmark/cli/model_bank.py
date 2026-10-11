@@ -8,7 +8,9 @@ from pathlib import Path
 import pandas as pd
 import torch
 
+from robustness_benchmark.core.classifiers import MODEL_TYPES
 from robustness_benchmark.core.data import DatasetSplit, load_dataset
+from robustness_benchmark.core.model_specs import MODEL_SPECS, MLPSpec, ModelSpec
 from robustness_benchmark.core.provenance import (
     file_sha256,
     save_model_checkpoint,
@@ -19,13 +21,12 @@ from robustness_benchmark.core.training import (
     ARCHITECTURE_DEV_SEEDS,
     BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
     BETARCE_GENERATION_ENSEMBLE_SIZE,
-    FULL_CHANGE_FAMILIES,
     FULL_VARIANTS_PER_FAMILY,
-    TRAINING_CONFIGS,
     architecture_audit,
-    fit_model,
+    fit_spec,
     make_betarce_generation_ensemble,
     make_changed_models,
+    select_base_spec,
 )
 from robustness_benchmark.evaluation.metrics import assess_model_changes
 
@@ -33,11 +34,20 @@ from robustness_benchmark.evaluation.metrics import assess_model_changes
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", default="breast_cancer")
+    parser.add_argument("--model-type", choices=MODEL_TYPES, default="mlp")
     parser.add_argument("--split-version", default="behavior_v3")
     parser.add_argument("--split-seed", type=int, default=2026)
-    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument(
+        "--epochs", type=int, default=300, help="MLP training epochs (MLP only)"
+    )
     parser.add_argument("--base-seeds", type=int, nargs="+", default=[2026, 2027, 2028])
-    parser.add_argument("--base-architecture", type=int, nargs="+", default=[32, 32])
+    parser.add_argument(
+        "--base-architecture",
+        type=int,
+        nargs="+",
+        default=[32, 32],
+        help="Prespecified MLP hidden layers (MLP only)",
+    )
     parser.add_argument("--maximum-accuracy-drop", type=float, default=0.03)
     parser.add_argument("--include-betarce-ensemble", action="store_true")
     parser.add_argument(
@@ -66,27 +76,18 @@ def _prepare_base_seed(
     data: DatasetSplit,
     dataset: str,
     split_version: str,
-    epochs: int,
     base_seed: int,
-    selected_architecture: tuple[int, ...],
+    spec: ModelSpec,
     maximum_accuracy_drop: float,
     include_betarce_ensemble: bool,
     output: Path,
 ) -> tuple[list[dict[str, object]], dict[str, dict[str, object]]]:
     """Train and save one base model and its complete, independent change bank."""
 
-    base_model = fit_model(
-        data.X_train,
-        data.y_train,
-        data.X_val,
-        data.y_val,
-        seed=base_seed,
-        hidden_dim=selected_architecture,
-        epochs=epochs,
+    base_model = fit_spec(
+        spec, data.X_train, data.y_train, data.X_val, data.y_val, seed=base_seed
     )
-    base_id = (
-        f"{dataset}:mlp_{'_'.join(map(str, selected_architecture))}:seed_{base_seed}"
-    )
+    base_id = f"{dataset}:{spec.id_fragment()}:seed_{base_seed}"
     base_path = output / "models" / f"seed_{base_seed}" / "base.pt"
     save_model_checkpoint(
         base_model,
@@ -96,7 +97,7 @@ def _prepare_base_seed(
             "role": "base",
             "split_version": split_version,
             "training_seed": base_seed,
-            "hidden_dim": list(selected_architecture),
+            "model_spec": spec.to_dict(),
         },
     )
     checkpoints = {
@@ -110,9 +111,8 @@ def _prepare_base_seed(
         data,
         base_model,
         base_seed=base_seed,
-        epochs=epochs,
-        hidden_dim=selected_architecture,
         profile="full",
+        spec=spec,
     )
     assessments = assess_model_changes(
         changes,
@@ -149,10 +149,7 @@ def _prepare_base_seed(
 
     if include_betarce_ensemble:
         generation_models = make_betarce_generation_ensemble(
-            data,
-            base_seed=base_seed,
-            hidden_dim=selected_architecture,
-            epochs=epochs,
+            data, base_seed=base_seed, spec=spec
         )
         for member, generation_model in enumerate(generation_models):
             ensemble_id = (
@@ -187,22 +184,15 @@ def _prepare_base_seed(
     return catalog_rows, checkpoints
 
 
-def prepare_model_bank(
+def _select_mlp_spec(
+    data: DatasetSplit,
     *,
-    dataset: str,
-    split_version: str,
-    split_seed: int = 2026,
     epochs: int,
-    base_seeds: list[int],
-    base_architecture: tuple[int, ...] = (32, 32),
-    maximum_accuracy_drop: float,
-    include_betarce_ensemble: bool = False,
-    workers: int = 2,
+    base_architecture: tuple[int, ...],
     output: Path,
-) -> dict[str, object]:
-    if workers < 1:
-        raise ValueError("workers must be positive")
-    data = load_dataset(dataset, seed=split_seed, split_version=split_version)
+) -> MLPSpec:
+    """Record the architecture audit and keep the prespecified architecture."""
+
     audit_recommendation, audit_rows = architecture_audit(data, epochs=epochs)
     if not base_architecture or any(width <= 0 for width in base_architecture):
         raise ValueError("base_architecture must contain positive layer widths")
@@ -213,7 +203,6 @@ def prepare_model_bank(
         if not isinstance(hidden_values, list):
             raise TypeError("hidden_dim audit field must be a list")
         row["selected"] = tuple(hidden_values) == selected_architecture
-    output.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(audit_rows).to_parquet(
         output / "architecture_audit.parquet", index=False
     )
@@ -231,15 +220,64 @@ def prepare_model_bank(
             "runs": audit_rows,
         },
     )
+    return MLPSpec(hidden_dim=selected_architecture, epochs=epochs)
+
+
+def _select_spec(data: DatasetSplit, base: ModelSpec, *, output: Path) -> ModelSpec:
+    """Tune the base configuration once per dataset on the validation split."""
+
+    selected, rows = select_base_spec(data, base)
+    pd.DataFrame(
+        [{**row, "model_spec": json.dumps(row["model_spec"])} for row in rows]
+    ).to_parquet(output / "base_config_selection.parquet", index=False)
+    write_json(
+        output / "base_config_selection.json",
+        {
+            "model_type": base.model_type,
+            "dev_seeds": list(ARCHITECTURE_DEV_SEEDS),
+            "selection_rule": (
+                "simplest configuration within 0.01 of the best mean validation "
+                "balanced accuracy"
+            ),
+            "selected": selected.to_dict(),
+            "runs": rows,
+        },
+    )
+    return selected
+
+
+def prepare_model_bank(
+    *,
+    dataset: str,
+    split_version: str,
+    split_seed: int = 2026,
+    model_type: str = "mlp",
+    epochs: int,
+    base_seeds: list[int],
+    base_architecture: tuple[int, ...] = (32, 32),
+    maximum_accuracy_drop: float,
+    include_betarce_ensemble: bool = False,
+    workers: int = 2,
+    output: Path,
+) -> dict[str, object]:
+    if workers < 1:
+        raise ValueError("workers must be positive")
+    data = load_dataset(dataset, seed=split_seed, split_version=split_version)
+    output.mkdir(parents=True, exist_ok=True)
+    if model_type == "mlp":
+        spec: ModelSpec = _select_mlp_spec(
+            data, epochs=epochs, base_architecture=base_architecture, output=output
+        )
+    else:
+        spec = _select_spec(data, MODEL_SPECS[model_type](), output=output)
 
     worker_arguments = [
         {
             "data": data,
             "dataset": dataset,
             "split_version": split_version,
-            "epochs": epochs,
             "base_seed": base_seed,
-            "selected_architecture": selected_architecture,
+            "spec": spec,
             "maximum_accuracy_drop": maximum_accuracy_drop,
             "include_betarce_ensemble": include_betarce_ensemble,
             "output": output,
@@ -282,20 +320,22 @@ def prepare_model_bank(
         "split_seed": split_seed,
         "epochs": epochs,
         "base_seeds": base_seeds,
-        "selected_architecture": list(selected_architecture),
-        "change_families": list(FULL_CHANGE_FAMILIES),
+        "model_type": spec.model_type,
+        "model_spec": spec.to_dict(),
+        "selected_architecture": (
+            list(spec.hidden_dim) if isinstance(spec, MLPSpec) else None
+        ),
+        "change_families": list(spec.change_families),
         "candidate_models_per_family": FULL_VARIANTS_PER_FAMILY,
         "candidate_models_per_base": (
-            FULL_VARIANTS_PER_FAMILY * len(FULL_CHANGE_FAMILIES)
+            FULL_VARIANTS_PER_FAMILY * len(spec.change_families)
         ),
-        "training_config_grid_version": "sgd_2x3_lr_wd_v2",
+        "training_config_grid_version": (
+            "sgd_2x3_lr_wd_v2" if spec.model_type == "mlp" else f"{spec.model_type}_v1"
+        ),
         "training_config_grid": [
-            {
-                "optimizer_name": optimizer_name,
-                "learning_rate": learning_rate,
-                "weight_decay": weight_decay,
-            }
-            for optimizer_name, learning_rate, weight_decay in TRAINING_CONFIGS
+            {"level": level, **overrides}
+            for level, overrides in spec.training_config_variants()
         ],
         "workers": min(workers, len(base_seeds)),
         "generation_ensemble_included": include_betarce_ensemble,
@@ -317,6 +357,7 @@ def main() -> None:
         dataset=args.dataset,
         split_version=args.split_version,
         split_seed=args.split_seed,
+        model_type=args.model_type,
         epochs=args.epochs,
         base_seeds=args.base_seeds,
         base_architecture=tuple(args.base_architecture),
@@ -330,7 +371,8 @@ def main() -> None:
         for key in (
             "dataset",
             "split_version",
-            "selected_architecture",
+            "model_type",
+            "model_spec",
             "base_seeds",
             "candidate_models_per_base",
             "candidate_n",

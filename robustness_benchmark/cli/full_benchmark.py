@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
+from robustness_benchmark.core.classifiers import MODEL_CLASSES
 from robustness_benchmark.core.data import load_dataset
 from robustness_benchmark.core.model_bank import (
     load_base_model,
@@ -13,6 +14,7 @@ from robustness_benchmark.core.model_bank import (
     model_bank_fingerprint,
     select_factuals,
 )
+from robustness_benchmark.core.model_specs import ModelSpec, spec_from_manifest
 from robustness_benchmark.core.provenance import (
     file_sha256,
     load_model_checkpoint,
@@ -30,6 +32,10 @@ from robustness_benchmark.evaluation.aggregate import (
     normalize_survival_schema,
 )
 from robustness_benchmark.evaluation.metrics import evaluate_survival
+from robustness_benchmark.evaluation.plausibility import (
+    PlausibilityReference,
+    plausibility_summary,
+)
 from robustness_benchmark.methods.apas_calibration import (
     apas_method_config,
     load_or_create_apas_calibration,
@@ -40,6 +46,7 @@ from robustness_benchmark.methods.configuration import (
     METHOD_CHOICES,
     METHODS,
     TUNING_GRIDS,
+    unsupported_methods,
 )
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
 from robustness_benchmark.methods.robx import (
@@ -308,8 +315,7 @@ def _generation_ensemble(
     base_id: str,
     data,
     base_seed: int,
-    hidden_dim: tuple[int, ...],
-    epochs: int,
+    spec: ModelSpec,
     size: int = BETARCE_GENERATION_ENSEMBLE_SIZE,
     protocol: str = BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
 ) -> list:
@@ -333,11 +339,7 @@ def _generation_ensemble(
             models.append(load_model_checkpoint(path)[0])
             continue
         model = make_betarce_generation_model(
-            data,
-            base_seed=base_seed,
-            member=member,
-            hidden_dim=hidden_dim,
-            epochs=epochs,
+            data, base_seed=base_seed, member=member, spec=spec
         )
         save_model_checkpoint(
             model,
@@ -435,6 +437,8 @@ def write_summary(
     configs: dict[str, dict[str, object]],
     base_model_ids: list[str],
     apas_calibration: list[dict[str, object]] | None = None,
+    skipped_methods: dict[str, str] | None = None,
+    model_type: str = "mlp",
 ) -> None:
     invocation_methods = set(methods)
     invocation_base_model_ids = set(base_model_ids)
@@ -584,6 +588,7 @@ def write_summary(
     generation_summary = []
     for method, group in generation.groupby("method", sort=True):
         valid_cost = group.loc[group["base_valid"], "l1_robust_scale_mean"]
+        valid_group = group[group["base_valid"]]
         certification_reported = (
             "method_certified" in group.columns
             and group["method_certified"].notna().any()
@@ -599,6 +604,7 @@ def write_summary(
                 "mean_l1_robust_scale": (
                     float(valid_cost.mean()) if len(valid_cost) else None
                 ),
+                **plausibility_summary(valid_group),
                 "certified_n": int(certified.sum()) if certified is not None else None,
                 "certified_coverage": (
                     float(certified.mean()) if certified is not None else None
@@ -610,6 +616,8 @@ def write_summary(
         {
             "methods": sorted(str(method) for method in generation["method"].unique()),
             "invocation_methods": methods,
+            "model_type": model_type,
+            "skipped_methods": skipped_methods or {},
             "invocation_base_configs": configs,
             "run_configs": run_configs,
             "apas_calibration": apas_calibration or [],
@@ -624,7 +632,16 @@ def write_summary(
 
 def main() -> None:
     args = parse_args()
-    methods = list(args.methods)
+    bank_manifest = json.loads((args.bank / "manifest.json").read_text())
+    spec = spec_from_manifest(bank_manifest)
+    skipped_methods = unsupported_methods(
+        args.methods, MODEL_CLASSES[spec.model_type].capabilities
+    )
+    for method, reason in skipped_methods.items():
+        print(f"Skipping {method} on a {spec.model_type} bank: it {reason}", flush=True)
+    methods = [method for method in args.methods if method not in skipped_methods]
+    if not methods:
+        raise ValueError(f"No requested method supports a {spec.model_type} model")
     if "apas" in methods:
         if args.apas_calibration_replicates < 1:
             raise ValueError("APAS calibration replicates must be positive")
@@ -637,7 +654,6 @@ def main() -> None:
         if args.apas_update_weight_decay < 0:
             raise ValueError("APAS update weight decay cannot be negative")
     args.output.mkdir(parents=True, exist_ok=True)
-    bank_manifest = json.loads((args.bank / "manifest.json").read_text())
     bank_fingerprint = model_bank_fingerprint(args.bank)
     available_base_seeds = [int(seed) for seed in bank_manifest["base_seeds"]]
     # Banks built before split_seed was recorded all used the 2026 split.
@@ -719,8 +735,6 @@ def main() -> None:
             }
             write_json(tuning_path, tuning)
 
-    architecture = tuple(int(width) for width in bank_manifest["selected_architecture"])
-    epochs = int(bank_manifest["epochs"])
     selected_base_seeds = args.base_seeds or available_base_seeds
     unknown_seeds = sorted(set(selected_base_seeds) - set(available_base_seeds))
     if unknown_seeds:
@@ -737,6 +751,7 @@ def main() -> None:
             seed=int(base_seed) + 30_000,
         )
         task = make_task(base_model, data.X_train, data.y_train, seed=int(base_seed))
+        plausibility = PlausibilityReference(data.X_train, base_model)
         seed_configs = resolve_robx_seed_configs(
             configs,
             methods,
@@ -772,8 +787,7 @@ def main() -> None:
                 base_id,
                 data,
                 int(base_seed),
-                architecture,
-                epochs,
+                spec,
                 size=int(seed_configs["betarce"]["generation_ensemble_n"]),
                 protocol=str(seed_configs["betarce"]["generation_model_space"]),
             )
@@ -806,7 +820,13 @@ def main() -> None:
                 method_config=method_config,
                 progress_description=f"seed {base_seed} · {method}",
             )
-            for row in generation:
+            plausibility_rows = plausibility.evaluate(
+                factuals,
+                counterfactuals,
+                [bool(row["base_valid"]) for row in generation],
+            )
+            for row, metrics in zip(generation, plausibility_rows, strict=True):
+                row.update(metrics)
                 row["base_model_id"] = base_id
                 row["method_config"] = json.dumps(method_config, sort_keys=True)
                 row["benchmark_protocol_version"] = BENCHMARK_PROTOCOL_VERSION
@@ -856,6 +876,8 @@ def main() -> None:
         configs,
         selected_base_model_ids,
         apas_calibration=apas_calibration_summaries,
+        skipped_methods=skipped_methods,
+        model_type=spec.model_type,
     )
 
 

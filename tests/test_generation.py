@@ -178,15 +178,17 @@ def test_betarce_adapter_robustifies_a_base_counterfactual(monkeypatch):
 def test_betarce_bootstrap_members_keep_base_initialization(monkeypatch):
     observed = {}
 
-    def fake_fit_model(X_train, y_train, X_val, y_val, **kwargs):
+    def fake_fit_spec(spec, X_train, y_train, X_val, y_val, *, seed):
         observed["X_train"] = X_train.copy()
         observed["y_train"] = y_train.copy()
         observed["X_val"] = X_val
         observed["y_val"] = y_val
-        observed.update(kwargs)
+        observed["seed"] = seed
+        observed["hidden_dim"] = spec.hidden_dim
+        observed["epochs"] = spec.epochs
         return object()
 
-    monkeypatch.setattr("robustness_benchmark.core.training.fit_model", fake_fit_model)
+    monkeypatch.setattr("robustness_benchmark.core.training.fit_spec", fake_fit_spec)
 
     class Split:
         X_train = pd.DataFrame({"a": np.arange(12)})
