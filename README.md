@@ -156,15 +156,19 @@ Method settings (`robustness_benchmark/methods/configuration.py`):
   up to 25 adverse validation instances of the first base model; frozen for
   the other seeds.
 - **ROAR-LIME**: the ROAR min–max objective on a local logistic LIME surrogate
-  ($\delta=0.1$, 20,000 LIME samples); its objective weight is tuned like
-  Wachter's.
-- **RBR**: the authors' implementation with radii and budget fixed at the
-  midpoints of their swept ranges; sampling radius 0.2 of the maximum pairwise
-  training distance (their convention).
-- **RNCE**: interval abstraction with parameter and bias radii 0.005. The
-  first-layer interval uses a sign-aware bound so that it is sound for
-  standardized (negative) inputs; the published encoding assumes non-negative
-  inputs.
+  ($\delta=0.1$, 5,000 LIME samples as in the authors' code); its objective
+  weight is tuned like Wachter's. LIME's standardized coefficients are mapped
+  back to input coordinates before optimizing.
+- **RBR**: the authors' implementation: $\epsilon = 0.5$ (the midpoint of
+  their swept range), $\delta_+ = 0.2$ (their default), 1,000 candidates,
+  200 samples, sampling radius 0.2 of the maximum pairwise training distance.
+- **RNCE**: interval abstraction as in Jiang et al. (2024): the nearest robust
+  training point in $\ell_1$, then the paper's line search toward the factual
+  (step 0.05). The weight and bias radius $\delta_{inc}$ is calibrated per base
+  model as the mean parameter $\ell_\infty$ distance over ten copies trained
+  for one more epoch on 10% of the update pool (Adam, learning rate 0.01,
+  batch 256), the authors' protocol. The first-layer interval uses a sign-aware
+  bound so that it is sound for standardized (negative) inputs.
 - **AP$\Delta$S**: the authors' iterative MCE margin search with
   $\alpha=0.999$, $R=0.995$ (1,378 sampled perturbations) and a 30 s wall-time
   limit per request. Its $\ell_\infty$ radius is calibrated per base model as
@@ -172,13 +176,21 @@ Method settings (`robustness_benchmark/methods/configuration.py`):
   the base checkpoint on bootstrap samples of the update pool (Adam,
   learning rate $10^{-3}$, batch size 8). Because the search reuses its
   parameter sample, the selected CFE receives one additional independent
-  holdout check; certified coverage is recorded separately.
+  holdout check; certified coverage is recorded separately. An infeasible MCE
+  is reported as `infeasible`, and a category change costs 1 in the MCE
+  objective, as in the authors' solver.
 - **RobX**: Gaussian local stability (variance 0.01, 1,000 samples) with a
   per-model threshold: `robx_balanced` uses the median stability of favorable
-  training instances, `robx_robust` their 90th percentile.
+  training instances, `robx_robust` their 90th percentile. Following the paper
+  and the BetaRCE implementation: $k = 3$ conservative counterfactuals, at most
+  100 interpolation steps, a growing-spheres start (100 samples, $\ell_2$,
+  step 0.1, 100 iterations), and the stable point closest to the factual is
+  returned. A point is accepted only if the model assigns it the target class
+  (the paper's definition of stability).
 - **BetaRCE**: growing-spheres base CFE followed by a second growing-spheres
   search that enforces the Beta lower bound ($\delta=0.9$, confidence 0.95)
-  over the 32-model ensemble.
+  over the 32-model ensemble; both stages use 100 samples, $\ell_2$, step 0.1
+  and 100 iterations.
 - **T:Rex** (Hamman et al., 2023; MLP and logistic regression): from a Wachter
   CFE, gradient ascent on RobX's stability score (variance 0.01, 1,000
   samples) until it reaches the `robx_balanced` threshold or 200 steps of size
@@ -199,29 +211,28 @@ Wachter, RNCE, AP$\Delta$S, and T:Rex need gradients or network weights and do
 not run on XGBoost; ROAR needs a linear model.
 
 *Categorical and immutable features.* Each dataset's `FeatureSchema`
-(`core/schema.py`) reaches every method through `task.schema`. A
-counterfactual changes mutable features only:
-- Gradient methods zero the gradients of immutable features.
-- Growing spheres and BetaRCE never perturb them and redraw categories as
-  whole one-hot groups. A category change counts toward the sphere's radius.
-- RobX follows its original code and treats every encoded column as
-  continuous; it starts from the shared growing spheres, and only the final
-  projection makes its output valid.
+(`core/schema.py`) reaches every method through `task.schema`. Methods follow
+their authors' handling of encoded features; immutable features are kept fixed
+as a protocol requirement:
+- Wachter judges validity at the projected point during search and returns
+  that point, as Wachter et al. (2017, §IV.A) and CARLA's `wachter_recourse` do.
+- T:Rex, ROAR, ROAR-LIME, RBR, RobX, and RNCE's line search treat one-hot and
+  integer columns as continuous, as their original code does. All of them
+  except RobX zero the gradients of immutable features or keep them fixed.
+- Growing spheres and BetaRCE never perturb immutable features and redraw
+  categories as whole one-hot groups, with a category change counting toward
+  the sphere's radius. This is a benchmark extension: Laugel et al. treat
+  features as continuous, and CARLA redraws each binary column independently.
 - KD-tree and RNCE give each candidate training point the factual's immutable
-  values and keep it only if it is still accepted (KD-tree) or still certified
-  (RNCE).
+  values and keep it only if it is still accepted (KD-tree) or certified again
+  (RNCE, following its Algorithm 4).
 - The AP$\Delta$S MILP encodes one-hot groups as binaries and integer features
-  as integers.
+  as integers, as in the authors' solver.
 
 Every counterfactual is then projected to a valid encoding before validity is
 checked: immutable features copied from the factual, one-hot groups snapped,
-integers rounded. `projection_changed` records whether that changed it.
-
-The gradient methods (Wachter, T:Rex, ROAR, ROAR-LIME, RBR) judge validity at
-the projected point during search, rather than at the continuous iterate. T:Rex
-also judges stability there. Each returns the projected point it tested, with
-its objective and update rule unchanged. On
-all-numeric datasets every output is identical to earlier runs.
+integers rounded. `projection_changed` records whether that changed it, and
+base validity is also reported before the projection.
 
 Calibration models, the BetaRCE ensemble, and tuning data are never part of
 the evaluation bank. Outputs per seed and method are written to

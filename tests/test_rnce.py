@@ -170,11 +170,8 @@ def test_rnce_line_search_returns_the_certified_point_nearest_the_factual():
     assert row["base_valid"]
 
 
-def test_rnce_delta_is_the_mean_update_distance():
-    calibration = {
-        "replicas": [{"parameter_linf_distance": d} for d in (0.01, 0.02, 0.06)],
-        "calibration_fingerprint": "abc",
-    }
+def test_rnce_delta_comes_from_its_calibration():
+    calibration = {"selected_delta": 0.03, "calibration_fingerprint": "abc"}
 
     config = rnce_method_config(LOCKED_CONFIGS["rnce"], calibration)
 

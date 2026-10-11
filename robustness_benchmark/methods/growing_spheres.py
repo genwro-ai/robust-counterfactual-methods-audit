@@ -158,7 +158,7 @@ class GrowingSpheresAdapter:
         n_search_samples: int = 100,
         p_norm: int = 2,
         step: float = 0.1,
-        max_iter: int = 200,
+        max_iter: int = 100,
     ) -> None:
         if not 0.5 <= target_probability < 1.0:
             raise ValueError("target_probability must lie in [0.5, 1)")

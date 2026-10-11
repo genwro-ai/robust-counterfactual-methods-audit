@@ -196,7 +196,7 @@ def create_generator(
                 n_search_samples=_int_config(config, "n_search_samples", 100),
                 p_norm=_int_config(config, "p_norm", 2),
                 step=_float_config(config, "step", 0.1),
-                max_iter=_int_config(config, "max_iter", 200),
+                max_iter=_int_config(config, "max_iter", 100),
             ),
             config,
         )

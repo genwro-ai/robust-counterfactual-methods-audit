@@ -37,9 +37,12 @@ from robustness_benchmark.evaluation.plausibility import (
     plausibility_summary,
 )
 from robustness_benchmark.methods.apas_calibration import (
+    RNCE_UPDATE_CALIBRATION,
     apas_method_config,
-    load_or_create_apas_calibration,
-    summarize_apas_calibration,
+    apas_update_calibration,
+    load_or_create_calibration,
+    rnce_method_config,
+    summarize_calibration,
 )
 from robustness_benchmark.methods.configuration import (
     LOCKED_CONFIGS,
@@ -451,7 +454,7 @@ def write_summary(
     methods: list[str],
     configs: dict[str, dict[str, object]],
     base_model_ids: list[str],
-    apas_calibration: list[dict[str, object]] | None = None,
+    calibrations: list[dict[str, object]] | None = None,
     skipped_methods: dict[str, str] | None = None,
     model_type: str = "mlp",
 ) -> None:
@@ -635,7 +638,7 @@ def write_summary(
             "skipped_methods": skipped_methods or {},
             "invocation_base_configs": configs,
             "run_configs": run_configs,
-            "apas_calibration": apas_calibration or [],
+            "calibrations": calibrations or [],
             "generation": generation_summary,
             "survival_all_changes": overall_survival_summary,
             "survival_by_family": family_summary,
@@ -757,7 +760,20 @@ def main() -> None:
     if unknown_seeds:
         raise ValueError(f"Base seeds are not in the model bank: {unknown_seeds}")
     selected_base_model_ids: list[str] = []
-    apas_calibration_summaries: list[dict[str, object]] = []
+    calibration_summaries: list[dict[str, object]] = []
+    calibrations = {
+        "apas": (
+            apas_update_calibration(
+                args.apas_calibration_replicates,
+                args.apas_update_epochs,
+                args.apas_update_batch_size,
+                args.apas_update_learning_rate,
+                args.apas_update_weight_decay,
+            ),
+            apas_method_config,
+        ),
+        "rnce": (RNCE_UPDATE_CALIBRATION, rnce_method_config),
+    }
     for base_seed in selected_base_seeds:
         base_id, base_model, changes = load_model_bank(args.bank, int(base_seed))
         selected_base_model_ids.append(base_id)
@@ -784,23 +800,22 @@ def main() -> None:
             data.X_train,
             int(base_seed),
         )
-        if "apas" in methods:
-            calibration = load_or_create_apas_calibration(
+        # APAS and RNCE radii come from update replicas of this base model.
+        for method, (protocol, method_config) in calibrations.items():
+            if method not in methods:
+                continue
+            calibration = load_or_create_calibration(
+                protocol,
                 output=args.output,
                 data=data,
                 base_model=base_model,
                 base_model_id=base_id,
                 base_seed=int(base_seed),
                 bank_fingerprint=bank_fingerprint,
-                calibration_replicates=args.apas_calibration_replicates,
-                update_epochs=args.apas_update_epochs,
-                update_batch_size=args.apas_update_batch_size,
-                update_learning_rate=args.apas_update_learning_rate,
-                update_weight_decay=args.apas_update_weight_decay,
             )
-            seed_configs["apas"] = apas_method_config(configs["apas"], calibration)
-            apas_calibration_summaries.append(
-                summarize_apas_calibration(
+            seed_configs[method] = method_config(configs[method], calibration)
+            calibration_summaries.append(
+                summarize_calibration(
                     calibration, base_model_id=base_id, base_seed=int(base_seed)
                 )
             )
@@ -856,8 +871,8 @@ def main() -> None:
                 row["method_config"] = json.dumps(method_config, sort_keys=True)
                 row["benchmark_protocol_version"] = BENCHMARK_PROTOCOL_VERSION
                 row["bank_fingerprint"] = bank_fingerprint
-                if method == "apas":
-                    row["apas_calibration_fingerprint"] = method_config[
+                if "calibration_fingerprint" in method_config:
+                    row["calibration_fingerprint"] = method_config[
                         "calibration_fingerprint"
                     ]
             survival = evaluate_survival(
@@ -877,8 +892,8 @@ def main() -> None:
                 row["benchmark_protocol_version"] = BENCHMARK_PROTOCOL_VERSION
                 row["method_config"] = json.dumps(method_config, sort_keys=True)
                 row["bank_fingerprint"] = bank_fingerprint
-                if method == "apas":
-                    row["apas_calibration_fingerprint"] = method_config[
+                if "calibration_fingerprint" in method_config:
+                    row["calibration_fingerprint"] = method_config[
                         "calibration_fingerprint"
                     ]
             pd.DataFrame(generation).to_parquet(generation_path, index=False)
@@ -900,7 +915,7 @@ def main() -> None:
         methods,
         configs,
         selected_base_model_ids,
-        apas_calibration=apas_calibration_summaries,
+        calibrations=calibration_summaries,
         skipped_methods=skipped_methods,
         model_type=spec.model_type,
     )

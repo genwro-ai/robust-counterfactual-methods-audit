@@ -16,6 +16,7 @@ from robustness_benchmark.core.training import (
     make_apas_calibration_models,
     make_bounded_parameter_change,
     make_changed_models,
+    make_update_replicas,
     parameter_linf_distance,
 )
 
@@ -119,3 +120,50 @@ def test_full_bank_has_25_unique_candidates_per_family(monkeypatch):
         and change.metadata["update_fraction"] == 1.0
     ]
     assert len(full_updates) == 1
+
+
+def test_rnce_calibration_follows_the_authors_incremental_protocol(tmp_path):
+    from robustness_benchmark.methods.apas_calibration import (
+        RNCE_UPDATE_CALIBRATION,
+        load_or_create_calibration,
+    )
+
+    class Split(SmallSplit):
+        name = "small"
+        X_update = pd.DataFrame({"a": range(40), "b": range(40)})
+        y_update = pd.Series(([0, 1] * 20), name="target")
+        X_test = SmallSplit.X_train
+        y_test = SmallSplit.y_train
+
+    base = TorchBinaryModel(input_dim=2, hidden_dim=(4,), seed=2026)
+    replicas = make_update_replicas(
+        Split(),
+        base,
+        base_seed=2026,
+        name="rnce",
+        size=3,
+        seed_offset=210_000,
+        sample_fraction=0.1,
+        replace=False,
+    )
+    calibration = load_or_create_calibration(
+        RNCE_UPDATE_CALIBRATION,
+        output=tmp_path,
+        data=Split(),
+        base_model=base,
+        base_model_id="base",
+        base_seed=2026,
+        bank_fingerprint="bank",
+    )
+
+    assert all(replica.metadata["sampled_n"] == 4 for replica in replicas)
+    assert all(
+        replica.metadata["sampling_scheme"] == "without_replacement"
+        for replica in replicas
+    )
+    distances = [r["parameter_linf_distance"] for r in calibration["replicas"]]
+    assert len(distances) == 10
+    assert calibration["selected_delta"] == pytest.approx(sum(distances) / 10)
+    assert (
+        tmp_path / "calibration" / "rnce" / "seed_2026" / "calibration.json"
+    ).is_file()

@@ -150,7 +150,7 @@ LOCKED_CONFIGS: dict[str, dict[str, object]] = {
             "n_search_samples": 100,
             "p_norm": 2,
             "step": 0.1,
-            "max_iter": 200,
+            "max_iter": 100,
         }
         for method, target in GROWING_SPHERES_TARGETS.items()
     },

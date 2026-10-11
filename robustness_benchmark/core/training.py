@@ -591,6 +591,81 @@ def make_betarce_generation_model(
     )
 
 
+def make_update_replicas(
+    data: DatasetSplit,
+    base_model: TorchBinaryModel,
+    *,
+    base_seed: int,
+    name: str,
+    size: int = 10,
+    seed_offset: int = 200_000,
+    sample_fraction: float = 1.0,
+    replace: bool = True,
+    update_epochs: int = 1,
+    batch_size: int = 8,
+    learning_rate: float = 1e-3,
+    weight_decay: float = 0.0,
+) -> list[ChangedModel]:
+    """Checkpoint-aligned update replicas used only to calibrate a radius.
+
+    Each replica starts from an exact copy of the base checkpoint and receives
+    one incremental update on its own sample of the reserved update pool
+    (drawn in random order). Sampling seeds vary the update sample, never the
+    initialization. The replicas must not enter the evaluation bank.
+    """
+
+    if size < 1:
+        raise ValueError("size must be positive")
+    pool_n = len(data.X_update)
+    if pool_n < 1:
+        raise ValueError("the reserved update pool is empty")
+    sample_n = max(1, int(pool_n * sample_fraction))
+    scheme = "with_replacement" if replace else "without_replacement"
+
+    models: list[ChangedModel] = []
+    for replicate in range(size):
+        sampling_seed = base_seed + seed_offset + replicate
+        rng = np.random.default_rng(sampling_seed)
+        positions = (
+            rng.integers(0, pool_n, size=sample_n)
+            if replace
+            else rng.choice(pool_n, size=sample_n, replace=False)
+        )
+        model = torch_incremental_update(
+            base_model,
+            data.X_update.iloc[positions].reset_index(drop=True),
+            data.y_update.iloc[positions].reset_index(drop=True),
+            epochs=update_epochs,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+        )
+        models.append(
+            ChangedModel(
+                change_id=f"{name}_calibration:r{replicate}:seed{sampling_seed}",
+                change_family=f"{name}_calibration",
+                change_level=f"{sample_fraction:g}_update_pool_{scheme}",
+                model=model,
+                metadata={
+                    "role": f"{name}_delta_calibration",
+                    "excluded_from_evaluation_changes": True,
+                    "replicate": replicate,
+                    "sampling_seed": sampling_seed,
+                    "sampling_scheme": scheme,
+                    "update_pool_n": pool_n,
+                    "sampled_n": sample_n,
+                    "update_epochs": update_epochs,
+                    "batch_size": batch_size,
+                    "learning_rate": learning_rate,
+                    "weight_decay": weight_decay,
+                    "initialized_from_base_checkpoint": True,
+                    "fresh_optimizer": "adam",
+                },
+            )
+        )
+    return models
+
+
 def make_apas_calibration_models(
     data: DatasetSplit,
     base_model: TorchBinaryModel,
@@ -602,59 +677,16 @@ def make_apas_calibration_models(
     learning_rate: float = 1e-3,
     weight_decay: float = 0.0,
 ) -> list[ChangedModel]:
-    """Create checkpoint-aligned update replicas used only to calibrate APAS.
+    """APAS radius replicas: bootstrap samples of the whole update pool."""
 
-    Each replica starts from an exact copy of the final base checkpoint and
-    receives one bootstrap-sized incremental update from the reserved update
-    pool. Sampling seeds vary the update batch, never network initialization.
-    The replicas are calibration data and must not enter the evaluation bank.
-    """
-
-    if size < 1:
-        raise ValueError("size must be positive")
-    update_n = len(data.X_update)
-    if update_n < 1:
-        raise ValueError("the reserved update pool is empty")
-
-    models: list[ChangedModel] = []
-    for replicate in range(size):
-        sampling_seed = base_seed + 200_000 + replicate
-        sampled_positions = np.random.default_rng(sampling_seed).integers(
-            0, update_n, size=update_n
-        )
-        X_update = data.X_update.iloc[sampled_positions].reset_index(drop=True)
-        y_update = data.y_update.iloc[sampled_positions].reset_index(drop=True)
-        model = torch_incremental_update(
-            base_model,
-            X_update,
-            y_update,
-            epochs=update_epochs,
-            batch_size=batch_size,
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-        )
-
-        models.append(
-            ChangedModel(
-                change_id=f"apas_calibration:r{replicate}:seed{sampling_seed}",
-                change_family="apas_calibration",
-                change_level="bootstrap_update_pool",
-                model=model,
-                metadata={
-                    "role": "apas_delta_calibration",
-                    "excluded_from_evaluation_changes": True,
-                    "replicate": replicate,
-                    "sampling_seed": sampling_seed,
-                    "sampling_scheme": "bootstrap_with_replacement",
-                    "update_pool_n": update_n,
-                    "sampled_n": update_n,
-                    "update_epochs": update_epochs,
-                    "batch_size": batch_size,
-                    "learning_rate": learning_rate,
-                    "weight_decay": weight_decay,
-                    "initialized_from_base_checkpoint": True,
-                    "fresh_optimizer": "adam",
-                },
-            )
-        )
-    return models
+    return make_update_replicas(
+        data,
+        base_model,
+        base_seed=base_seed,
+        name="apas",
+        size=size,
+        update_epochs=update_epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+    )
