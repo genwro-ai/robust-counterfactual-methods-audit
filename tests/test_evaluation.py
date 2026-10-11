@@ -1,18 +1,17 @@
 import pandas as pd
 
-from robustness_benchmark.core.classifiers import TorchBinaryModel
-from robustness_benchmark.core.model_changes import ChangedModel
-from robustness_benchmark.evaluation.aggregate import survival_summary
-from robustness_benchmark.evaluation.robustness import (
+from robustness_benchmark.core.classifiers import MLPClassifier
+from robustness_benchmark.core.model_bank import (
     assess_model_changes,
-    behavioral_distance,
-    evaluate_survival,
     stratify_severity,
 )
+from robustness_benchmark.core.model_changes import ChangedModel, behavioral_distance
+from robustness_benchmark.evaluation.aggregate import survival_summary
+from robustness_benchmark.evaluation.robustness import evaluate_survival
 
 
 def test_behavioral_distance_is_zero_for_identical_model():
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [1.0, 0.0]})
 
     result = behavioral_distance(model, model, X)

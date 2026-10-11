@@ -4,10 +4,10 @@ import pytest
 
 from robustness_benchmark.core.data import (
     DatasetSplit,
-    encode_favorable,
     load_dataset,
-    select_adverse_indices,
 )
+from robustness_benchmark.core.datasets import encode_favorable
+from robustness_benchmark.core.factuals import select_adverse_indices
 
 
 def test_dataset_splits_are_disjoint_and_scaler_is_train_only():

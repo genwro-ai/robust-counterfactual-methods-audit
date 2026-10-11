@@ -5,12 +5,12 @@ from pathlib import Path
 import pandas as pd
 
 from robustness_benchmark.core.data import load_dataset
-from robustness_benchmark.core.model_bank import (
-    load_model_bank,
-    model_bank_fingerprint,
-    select_factuals,
+from robustness_benchmark.core.factuals import select_factuals
+from robustness_benchmark.core.model_bank import load_model_bank, model_bank_fingerprint
+from robustness_benchmark.core.model_changes import (
+    behavioral_distance,
+    parameter_linf_distance,
 )
-from robustness_benchmark.core.model_changes import parameter_linf_distance
 from robustness_benchmark.core.protocol import EVALUATION_FACTUALS_SEED_OFFSET
 from robustness_benchmark.core.provenance import load_model_checkpoint, write_json
 from robustness_benchmark.evaluation.aggregate import (
@@ -20,7 +20,6 @@ from robustness_benchmark.evaluation.aggregate import (
     seed_family_survival_summary,
 )
 from robustness_benchmark.evaluation.robustness import (
-    behavioral_distance,
     evaluate_survival,
 )
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION

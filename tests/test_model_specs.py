@@ -5,20 +5,20 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from robustness_benchmark.core import model_changes
 from robustness_benchmark.core.classifiers import (
     LogisticClassifier,
     XGBoostClassifier,
 )
 from robustness_benchmark.core.fitting import select_base_spec
 from robustness_benchmark.core.model_changes import (
+    FULL_VARIANTS_PER_FAMILY,
+    families,
     make_betarce_generation_model,
     make_bounded_parameter_change,
     make_changed_models,
     parameter_linf_distance,
 )
 from robustness_benchmark.core.model_specs import (
-    FULL_VARIANTS_PER_FAMILY,
     LogisticSpec,
     MLPSpec,
     XGBoostSpec,
@@ -109,7 +109,7 @@ def test_candidate_lists_exclude_the_base_and_leave_reserves():
 def test_configuration_family_skips_candidates_that_reproduce_the_base(monkeypatch):
     spec = LogisticSpec()
     base = spec.fit(Split.X_train, Split.y_train, Split.X_val, Split.y_val, seed=1)
-    real_fit = model_changes.fit_spec
+    real_fit = families.fit_spec
 
     def fit_or_copy_base(candidate, *args, **kwargs):
         # Every L1 candidate reproduces the base model exactly.
@@ -117,7 +117,7 @@ def test_configuration_family_skips_candidates_that_reproduce_the_base(monkeypat
             return copy.deepcopy(base)
         return real_fit(candidate, *args, **kwargs)
 
-    monkeypatch.setattr(model_changes, "fit_spec", fit_or_copy_base)
+    monkeypatch.setattr(families, "fit_spec", fit_or_copy_base)
     changes = make_changed_models(Split(), base, base_seed=1, spec=spec)
 
     configs = [c for c in changes if c.change_family == "training_config"]

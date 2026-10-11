@@ -9,7 +9,7 @@ from robustness_benchmark.core.classifiers import (
     LINEAR,
     TORCH_NETWORK,
     LogisticClassifier,
-    TorchBinaryModel,
+    MLPClassifier,
     XGBoostClassifier,
 )
 from robustness_benchmark.core.provenance import (
@@ -107,7 +107,7 @@ def test_xgboost_continued_training_adds_trees_without_touching_base():
 @pytest.mark.parametrize(
     ("model_class", "kwargs"),
     [
-        (TorchBinaryModel, {"hidden_dim": (4,)}),
+        (MLPClassifier, {"hidden_dim": (4,)}),
         (LogisticClassifier, {"C": 0.3, "class_weight": "balanced"}),
         (XGBoostClassifier, {"n_estimators": 5, "max_depth": 2}),
     ],
@@ -128,7 +128,7 @@ def test_checkpoint_round_trip_for_every_model_class(tmp_path, model_class, kwar
 
 
 def test_capabilities_by_model_class():
-    assert TorchBinaryModel.capabilities == {DIFFERENTIABLE, TORCH_NETWORK}
+    assert MLPClassifier.capabilities == {DIFFERENTIABLE, TORCH_NETWORK}
     assert LogisticClassifier.capabilities == {DIFFERENTIABLE, TORCH_NETWORK, LINEAR}
     assert XGBoostClassifier.capabilities == frozenset()
 
@@ -136,7 +136,7 @@ def test_capabilities_by_model_class():
 def test_method_support_matrix():
     methods = list(METHODS)
 
-    assert set(unsupported_methods(methods, TorchBinaryModel.capabilities)) == {"roar"}
+    assert set(unsupported_methods(methods, MLPClassifier.capabilities)) == {"roar"}
     assert unsupported_methods(methods, LogisticClassifier.capabilities) == {}
     assert set(unsupported_methods(methods, XGBoostClassifier.capabilities)) == {
         "wachter",

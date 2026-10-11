@@ -9,8 +9,8 @@ import pandas as pd
 
 from robustness_benchmark.core.classifiers import MODEL_CLASSES
 from robustness_benchmark.core.data import load_dataset
+from robustness_benchmark.core.factuals import select_factuals
 from robustness_benchmark.core.fitting import fit_spec
-from robustness_benchmark.core.model_bank import select_factuals
 from robustness_benchmark.core.model_changes import (
     BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
     make_betarce_generation_ensemble,

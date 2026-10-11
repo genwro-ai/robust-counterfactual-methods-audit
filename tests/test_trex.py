@@ -5,7 +5,7 @@ import torch
 
 from robustness_benchmark.core.classifiers import (
     LogisticClassifier,
-    TorchBinaryModel,
+    MLPClassifier,
     XGBoostClassifier,
 )
 from robustness_benchmark.methods.configuration import LOCKED_CONFIGS
@@ -46,7 +46,7 @@ def target_probability(model):
 
 
 def test_stability_matches_robx_estimator_on_the_same_noise():
-    model, X, _ = trained(TorchBinaryModel, hidden_dim=(8,))
+    model, X, _ = trained(MLPClassifier, hidden_dim=(8,))
     point = X[model.predict(X).iloc[:, 0].to_numpy() >= 0.5].iloc[0].to_numpy()
     noise = np.random.default_rng(3).standard_normal((1_000, 3)) * 0.1
 
@@ -69,7 +69,7 @@ def test_stability_matches_robx_estimator_on_the_same_noise():
 
 @pytest.mark.parametrize(
     ("model_class", "kwargs"),
-    [(TorchBinaryModel, {"hidden_dim": (8,)}), (LogisticClassifier, {})],
+    [(MLPClassifier, {"hidden_dim": (8,)}), (LogisticClassifier, {})],
 )
 def test_trex_reaches_robx_calibrated_tau(model_class, kwargs):
     model, X, y = trained(model_class, **kwargs)

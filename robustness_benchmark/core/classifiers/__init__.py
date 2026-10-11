@@ -11,11 +11,11 @@ from robustness_benchmark.core.classifiers.base import (
 )
 from robustness_benchmark.core.classifiers.gradient_boosting import XGBoostClassifier
 from robustness_benchmark.core.classifiers.logistic import LogisticClassifier
-from robustness_benchmark.core.classifiers.mlp import TorchBinaryModel
+from robustness_benchmark.core.classifiers.mlp import MLPClassifier
 
 MODEL_CLASSES: dict[str, type[Classifier]] = {
     model_class.model_type: model_class
-    for model_class in (TorchBinaryModel, LogisticClassifier, XGBoostClassifier)
+    for model_class in (MLPClassifier, LogisticClassifier, XGBoostClassifier)
 }
 MODEL_TYPES = tuple(MODEL_CLASSES)
 
@@ -37,7 +37,7 @@ __all__ = [
     "TORCH_NETWORK",
     "Classifier",
     "LogisticClassifier",
-    "TorchBinaryModel",
+    "MLPClassifier",
     "XGBoostClassifier",
     "classifier_from_payload",
     "missing_capabilities",

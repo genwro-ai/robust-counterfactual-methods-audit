@@ -6,10 +6,10 @@ import torch
 from sklearn.linear_model import LogisticRegression
 
 from robustness_benchmark.core.classifiers.base import LINEAR
-from robustness_benchmark.core.classifiers.mlp import TorchBinaryModel
+from robustness_benchmark.core.classifiers.mlp import MLPClassifier
 
 
-class LogisticClassifier(TorchBinaryModel):
+class LogisticClassifier(MLPClassifier):
     """Logistic regression fitted by scikit-learn, evaluated as a torch layer.
 
     The coefficients live in a zero-hidden-layer MLP, so gradients, interval
@@ -18,7 +18,7 @@ class LogisticClassifier(TorchBinaryModel):
     """
 
     model_type = "logistic"
-    capabilities = frozenset({*TorchBinaryModel.capabilities, LINEAR})
+    capabilities = frozenset({*MLPClassifier.capabilities, LINEAR})
 
     def __init__(
         self,

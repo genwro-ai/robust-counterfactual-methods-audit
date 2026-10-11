@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 import torch
 
-from robustness_benchmark.core.classifiers import LogisticClassifier, TorchBinaryModel
+from robustness_benchmark.core.classifiers import LogisticClassifier, MLPClassifier
 from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.evaluation.plausibility import PlausibilityReference
 from robustness_benchmark.evaluation.proximity import GowerDistance, feature_range
@@ -61,8 +61,8 @@ def mixed_data(n: int = 240) -> tuple[pd.DataFrame, pd.Series, FeatureSchema]:
     return X, y, schema
 
 
-def mlp(X, y, seed: int = 1) -> TorchBinaryModel:
-    model = TorchBinaryModel(input_dim=X.shape[1], hidden_dim=(8,), seed=seed)
+def mlp(X, y, seed: int = 1) -> MLPClassifier:
+    model = MLPClassifier(input_dim=X.shape[1], hidden_dim=(8,), seed=seed)
     model.train(X, y, X_val=X, y_val=y, learning_rate=1e-2, epochs=100)
     return model
 
@@ -278,7 +278,7 @@ def test_wachter_judges_validity_after_rounding():
     assert counterfactuals.iloc[0, 0] >= 11.0
 
 
-def milp_solution(job_c_weight: float) -> tuple[np.ndarray, TorchBinaryModel]:
+def milp_solution(job_c_weight: float) -> tuple[np.ndarray, MLPClassifier]:
     """MCE's own solution for logit = relu(age + 10 hours + w job_c + 5) - 6.
 
     The factual (age 0, hours 0, job a) has logit -1. Hours is immutable, age
@@ -292,7 +292,7 @@ def milp_solution(job_c_weight: float) -> tuple[np.ndarray, TorchBinaryModel]:
         integer=("age",),
         immutable=("hours",),
     )
-    model = TorchBinaryModel(input_dim=5, hidden_dim=(1,), seed=0)
+    model = MLPClassifier(input_dim=5, hidden_dim=(1,), seed=0)
     network = model.get_torch_model()
     with torch.no_grad():
         network[0].weight.copy_(torch.tensor([[1.0, 10.0, 0.0, 0.0, job_c_weight]]))

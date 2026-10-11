@@ -1,23 +1,101 @@
-import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
 
+from robustness_benchmark.core.classifiers import MLPClassifier
+from robustness_benchmark.core.data import DatasetSplit
 from robustness_benchmark.core.model_changes import (
-    make_update_replicas,
+    ChangedModel,
+    behavioral_distance,
     parameter_linf_distance,
 )
+from robustness_benchmark.core.model_specs import torch_incremental_update
 from robustness_benchmark.core.provenance import (
     file_sha256,
     save_model_checkpoint,
+    stable_hash,
     write_json,
 )
-from robustness_benchmark.evaluation.robustness import behavioral_distance
 
 APAS_CALIBRATION_PROTOCOL_VERSION = "apas_update_calibration_v1"
 RNCE_CALIBRATION_PROTOCOL_VERSION = "rnce_incremental_delta_v1"
+
+
+def make_update_replicas(
+    data: DatasetSplit,
+    base_model: MLPClassifier,
+    *,
+    base_seed: int,
+    name: str,
+    size: int = 10,
+    seed_offset: int = 200_000,
+    sample_fraction: float = 1.0,
+    replace: bool = True,
+    update_epochs: int = 1,
+    batch_size: int = 8,
+    learning_rate: float = 1e-3,
+    weight_decay: float = 0.0,
+) -> list[ChangedModel]:
+    """Checkpoint-aligned update replicas used only to calibrate a radius.
+
+    Each replica starts from an exact copy of the base checkpoint and receives
+    one incremental update on its own sample of the reserved update pool
+    (drawn in random order). Sampling seeds vary the update sample, never the
+    initialization. The replicas must not enter the evaluation bank.
+    """
+
+    if size < 1:
+        raise ValueError("size must be positive")
+    pool_n = len(data.X_update)
+    if pool_n < 1:
+        raise ValueError("the reserved update pool is empty")
+    sample_n = max(1, int(pool_n * sample_fraction))
+    scheme = "with_replacement" if replace else "without_replacement"
+
+    models: list[ChangedModel] = []
+    for replicate in range(size):
+        sampling_seed = base_seed + seed_offset + replicate
+        rng = np.random.default_rng(sampling_seed)
+        positions = (
+            rng.integers(0, pool_n, size=sample_n)
+            if replace
+            else rng.choice(pool_n, size=sample_n, replace=False)
+        )
+        model = torch_incremental_update(
+            base_model,
+            data.X_update.iloc[positions].reset_index(drop=True),
+            data.y_update.iloc[positions].reset_index(drop=True),
+            epochs=update_epochs,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+        )
+        models.append(
+            ChangedModel(
+                change_id=f"{name}_calibration:r{replicate}:seed{sampling_seed}",
+                change_family=f"{name}_calibration",
+                change_level=f"{sample_fraction:g}_update_pool_{scheme}",
+                model=model,
+                metadata={
+                    "role": f"{name}_delta_calibration",
+                    "excluded_from_evaluation_changes": True,
+                    "replicate": replicate,
+                    "sampling_seed": sampling_seed,
+                    "sampling_scheme": scheme,
+                    "update_pool_n": pool_n,
+                    "sampled_n": sample_n,
+                    "update_epochs": update_epochs,
+                    "batch_size": batch_size,
+                    "learning_rate": learning_rate,
+                    "weight_decay": weight_decay,
+                    "initialized_from_base_checkpoint": True,
+                    "fresh_optimizer": "adam",
+                },
+            )
+        )
+    return models
 
 
 @dataclass(frozen=True)
@@ -82,11 +160,6 @@ RNCE_UPDATE_CALIBRATION = UpdateCalibration(
     seed_offset=210_000,
     delta_estimator="mean",
 )
-
-
-def stable_hash(value: object) -> str:
-    serialized = json.dumps(value, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(serialized.encode()).hexdigest()
 
 
 def calibration_config(

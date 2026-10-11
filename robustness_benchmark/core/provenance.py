@@ -53,3 +53,10 @@ def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
     )
+
+
+def stable_hash(value: object) -> str:
+    """SHA-256 of a value's canonical JSON."""
+
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode()).hexdigest()

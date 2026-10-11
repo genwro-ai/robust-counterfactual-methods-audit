@@ -8,18 +8,14 @@ from tqdm.auto import tqdm
 
 from robustness_benchmark.core.classifiers import MODEL_CLASSES
 from robustness_benchmark.core.data import load_dataset
+from robustness_benchmark.core.factuals import select_factuals
 from robustness_benchmark.core.model_bank import (
     load_base_model,
+    load_generation_ensemble,
     load_model_bank,
     model_bank_fingerprint,
-    select_factuals,
 )
-from robustness_benchmark.core.model_changes import (
-    BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
-    BETARCE_GENERATION_ENSEMBLE_SIZE,
-    make_betarce_generation_model,
-)
-from robustness_benchmark.core.model_specs import ModelSpec, spec_from_manifest
+from robustness_benchmark.core.model_specs import spec_from_manifest
 from robustness_benchmark.core.protocol import (
     EVALUATION_FACTUALS_SEED_OFFSET,
     STABILITY_TAU_SEED_OFFSET,
@@ -27,8 +23,6 @@ from robustness_benchmark.core.protocol import (
 )
 from robustness_benchmark.core.provenance import (
     file_sha256,
-    load_model_checkpoint,
-    save_model_checkpoint,
     write_json,
 )
 from robustness_benchmark.evaluation.aggregate import (
@@ -323,60 +317,6 @@ def configs_from_frozen_tuning(
         }
     )
     return configs, {"protocol": protocol, "methods": method_report}
-
-
-def _generation_ensemble(
-    output: Path,
-    bank: Path,
-    bank_manifest: dict,
-    base_id: str,
-    data,
-    base_seed: int,
-    spec: ModelSpec,
-    size: int = BETARCE_GENERATION_ENSEMBLE_SIZE,
-    protocol: str = BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
-) -> list:
-    checkpoints = bank_manifest.get("checkpoints", {})
-    bank_member_ids = [
-        f"{base_id}/betarce_generation/{protocol}/member_{member:02d}"
-        for member in range(size)
-    ]
-    if all(member_id in checkpoints for member_id in bank_member_ids):
-        return [
-            load_model_checkpoint(bank / checkpoints[member_id]["path"])[0]
-            for member_id in bank_member_ids
-        ]
-    directory = output / "generation_ensembles" / protocol / f"seed_{base_seed}"
-    paths = [directory / f"member_{member:02d}.pt" for member in range(size)]
-    bank_fingerprint = model_bank_fingerprint(bank)
-    models = []
-    for member, path in enumerate(
-        tqdm(paths, desc=f"seed {base_seed} · BetaRCE ensemble", leave=False)
-    ):
-        if path.is_file():
-            # Cached members are reused only when trained for this bank.
-            model, payload = load_model_checkpoint(path)
-            if payload["metadata"].get("bank_fingerprint") == bank_fingerprint:
-                models.append(model)
-                continue
-        model = make_betarce_generation_model(
-            data, base_seed=base_seed, member=member, spec=spec
-        )
-        save_model_checkpoint(
-            model,
-            f"betarce_generation:{protocol}:seed_{base_seed}:member_{member:02d}",
-            path,
-            {
-                "role": "generation_ensemble",
-                "excluded_from_evaluation_changes": True,
-                "protocol": protocol,
-                "initialization_seed": base_seed,
-                "bootstrap_sampling_seed": base_seed + 100_000 + member,
-                "bank_fingerprint": bank_fingerprint,
-            },
-        )
-        models.append(model)
-    return models
 
 
 def run_matches_config(
@@ -822,14 +762,13 @@ def main() -> None:
                 )
             )
         ensemble = (
-            _generation_ensemble(
-                args.output,
-                args.bank,
-                bank_manifest,
-                base_id,
-                data,
-                int(base_seed),
-                spec,
+            load_generation_ensemble(
+                bank=args.bank,
+                base_id=base_id,
+                data=data,
+                base_seed=int(base_seed),
+                spec=spec,
+                cache=args.output / "generation_ensembles",
                 size=int(seed_configs["betarce"]["generation_ensemble_n"]),
                 protocol=str(seed_configs["betarce"]["generation_model_space"]),
             )

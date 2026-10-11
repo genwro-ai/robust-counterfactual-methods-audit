@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from robustness_benchmark.core.classifiers import TorchBinaryModel
+from robustness_benchmark.core.classifiers import MLPClassifier
 from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.methods.rbr import LabelPredictor, RBRAdapter
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
@@ -23,7 +23,7 @@ class FixedRBR:
 def linear_task():
     X = pd.DataFrame({"a": [-1.0, 0.0, 1.0], "b": [0.0, 0.0, 0.0]})
     y = pd.Series([0, 0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     with torch.no_grad():
         linear = model.get_torch_model()[0]
         linear.weight.copy_(torch.tensor([[5.0, 0.0]]))
@@ -89,7 +89,7 @@ def test_rbr_returns_no_counterfactual_without_a_boundary_point():
     # The only favorable training point differs in the immutable b; with the
     # factual's b it is adverse, so the line search finds no boundary.
     X = pd.DataFrame({"a": [-1.0, 0.0], "b": [0.0, 1.0]})
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     with torch.no_grad():
         linear = model.get_torch_model()[0]
         linear.weight.copy_(torch.tensor([[5.0, 10.0]]))

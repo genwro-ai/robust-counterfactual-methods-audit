@@ -5,7 +5,7 @@ import torch
 
 from robustness_benchmark.core.classifiers import (
     LogisticClassifier,
-    TorchBinaryModel,
+    MLPClassifier,
     XGBoostClassifier,
 )
 from robustness_benchmark.methods.configuration import (
@@ -47,7 +47,7 @@ def hand_made_logistic(weights, bias):
 @pytest.mark.parametrize(
     ("model_class", "kwargs"),
     [
-        (TorchBinaryModel, {"hidden_dim": (8,)}),
+        (MLPClassifier, {"hidden_dim": (8,)}),
         (LogisticClassifier, {}),
         (XGBoostClassifier, {"n_estimators": 10, "max_depth": 2}),
     ],
@@ -106,7 +106,7 @@ def test_roar_runs_on_logistic_regression():
 @pytest.mark.parametrize(
     ("model_class", "kwargs"),
     [
-        (TorchBinaryModel, {"hidden_dim": (8,)}),
+        (MLPClassifier, {"hidden_dim": (8,)}),
         (XGBoostClassifier, {"n_estimators": 5, "max_depth": 2}),
     ],
 )

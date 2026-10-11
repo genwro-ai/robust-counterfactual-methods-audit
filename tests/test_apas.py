@@ -1,7 +1,7 @@
 import pandas as pd
 import torch
 
-from robustness_benchmark.core.classifiers import TorchBinaryModel
+from robustness_benchmark.core.classifiers import MLPClassifier
 from robustness_benchmark.methods import apas
 from robustness_benchmark.methods.apas import APASAdapter
 from robustness_benchmark.methods.registry import make_task
@@ -20,7 +20,7 @@ class FixedMCE:
 def test_apas_sample_count_and_successful_generation(monkeypatch):
     X = pd.DataFrame({"a": [-1.0, 1.0], "b": [0.0, 0.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     with torch.no_grad():
         linear = model.get_torch_model()[0]
         linear.weight.copy_(torch.tensor([[5.0, 0.0]]))
@@ -52,7 +52,7 @@ def test_apas_sample_count_and_successful_generation(monkeypatch):
 def test_apas_parameter_samples_are_reused():
     X = pd.DataFrame({"a": [-1.0, 1.0], "b": [0.0, 0.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=3)
     generator = APASAdapter(
         task,
@@ -73,7 +73,7 @@ def test_apas_parameter_samples_are_reused():
 def test_apas_confirmation_uses_an_independent_parameter_sample():
     X = pd.DataFrame({"a": [-1.0, 1.0], "b": [0.0, 0.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=3)
     generator = APASAdapter(
         task,
@@ -95,7 +95,7 @@ def test_apas_returns_author_candidate_but_does_not_overclaim_certificate(
 ):
     X = pd.DataFrame({"a": [-1.0, 1.0], "b": [0.0, 0.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     with torch.no_grad():
         linear = model.get_torch_model()[0]
         linear.weight.copy_(torch.tensor([[5.0, 0.0]]))
@@ -139,7 +139,7 @@ def test_apas_returns_author_candidate_but_does_not_overclaim_certificate(
 def test_apas_reports_an_infeasible_mce_without_raising_the_margin():
     # The network outputs logit -10 everywhere, so no input reaches class 1.
     X = pd.DataFrame({"a": [-1.0, 1.0], "b": [0.0, 1.0]})
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(1,), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(1,), seed=0)
     network = model.get_torch_model()
     with torch.no_grad():
         network[0].weight.zero_()

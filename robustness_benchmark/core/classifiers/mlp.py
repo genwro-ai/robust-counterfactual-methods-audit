@@ -12,7 +12,7 @@ from robustness_benchmark.core.classifiers.base import (
 )
 
 
-class TorchBinaryModel(Classifier):
+class MLPClassifier(Classifier):
     """Deterministic binary multilayer perceptron."""
 
     model_type = "mlp"
@@ -148,7 +148,7 @@ class TorchBinaryModel(Classifier):
         }
 
     @classmethod
-    def from_checkpoint_payload(cls, payload: dict[str, Any]) -> "TorchBinaryModel":
+    def from_checkpoint_payload(cls, payload: dict[str, Any]) -> "MLPClassifier":
         model = cls(
             input_dim=int(payload["input_dim"]),
             hidden_dim=tuple(int(width) for width in payload["hidden_dim"]),

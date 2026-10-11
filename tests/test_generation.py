@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from robustness_benchmark.core.classifiers import TorchBinaryModel
+from robustness_benchmark.core.classifiers import MLPClassifier
 from robustness_benchmark.core.model_changes import make_betarce_generation_model
 from robustness_benchmark.core.model_specs import MLPSpec
 from robustness_benchmark.evaluation.aggregate import generation_metrics
@@ -58,7 +58,7 @@ def test_generation_coverage_is_separate_from_validity():
 def test_generator_exception_is_missing_and_not_a_factual(monkeypatch):
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
     monkeypatch.setattr(
         methods, "create_generator", lambda *_args: (ExplodingGenerator(), {})
@@ -82,7 +82,7 @@ def test_generator_exception_is_missing_and_not_a_factual(monkeypatch):
 def test_robx_adaptive_variants_require_resolved_tau():
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
 
     with pytest.raises(ValueError, match="requires a calibrated tau"):
@@ -218,7 +218,7 @@ def test_betarce_bootstrap_members_keep_base_initialization(monkeypatch):
         return object()
 
     monkeypatch.setattr(
-        "robustness_benchmark.core.model_changes.fit_spec", fake_fit_spec
+        "robustness_benchmark.core.model_changes.ensemble.fit_spec", fake_fit_spec
     )
 
     class Split:
@@ -245,7 +245,7 @@ def test_betarce_bootstrap_members_keep_base_initialization(monkeypatch):
 def test_apas_configuration_is_explicit():
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
 
     generator, kwargs = methods.create_generator(
@@ -270,7 +270,7 @@ def test_apas_configuration_is_explicit():
 def test_apas_has_no_implicit_fixed_delta():
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
 
     with pytest.raises(ValueError, match="delta must be provided explicitly"):
@@ -280,7 +280,7 @@ def test_apas_has_no_implicit_fixed_delta():
 def test_no_counterfactual_is_not_reported_as_an_exception(monkeypatch):
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
     monkeypatch.setattr(
         methods, "create_generator", lambda *_args: (EmptyGenerator(), {})
@@ -296,7 +296,7 @@ def test_no_counterfactual_is_not_reported_as_an_exception(monkeypatch):
 def test_factual_returned_unchanged_is_no_counterfactual(monkeypatch):
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
     monkeypatch.setattr(
         methods, "create_generator", lambda *_args: (FactualEchoGenerator(), {})

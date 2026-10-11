@@ -4,7 +4,7 @@ import pytest
 import torch
 from gurobipy import GRB
 
-from robustness_benchmark.core.classifiers import TorchBinaryModel
+from robustness_benchmark.core.classifiers import MLPClassifier
 from robustness_benchmark.methods.calibration import rnce_method_config
 from robustness_benchmark.methods.configuration import LOCKED_CONFIGS
 from robustness_benchmark.methods.milp.delta_robustness import DeltaRobustnessEvaluator
@@ -57,7 +57,7 @@ def minimum_pgd_logit(model, instance, delta, bias_delta, restarts=8, steps=100)
 
 
 def test_negative_input_uses_sign_aware_first_layer_interval():
-    model = TorchBinaryModel(input_dim=1, hidden_dim=(1,), seed=0)
+    model = MLPClassifier(input_dim=1, hidden_dim=(1,), seed=0)
     network = model.get_torch_model()
     with torch.no_grad():
         network[0].weight.fill_(-1.0)
@@ -92,7 +92,7 @@ def test_negative_input_uses_sign_aware_first_layer_interval():
 
 
 def test_rnce_rejects_unknown_interval_encoding():
-    model = TorchBinaryModel(input_dim=1, hidden_dim=(1,), seed=0)
+    model = MLPClassifier(input_dim=1, hidden_dim=(1,), seed=0)
     X = pd.DataFrame({"feature": [-1.0]})
     task = make_task(model, X, pd.Series([1]), seed=0)
     generator, kwargs = create_generator(
@@ -115,7 +115,7 @@ def test_logistic_interval_bound_matches_closed_form_on_negative_inputs():
     # Without a hidden layer the output layer reads the inputs directly. The
     # worst case over |dw| <= delta, |db| <= bias_delta is
     # w.x + b - delta * ||x||_1 - bias_delta.
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     linear = model.get_torch_model()[0]
     with torch.no_grad():
         linear.weight.copy_(torch.tensor([[1.0, -2.0]]))
@@ -137,7 +137,7 @@ def test_logistic_interval_bound_matches_closed_form_on_negative_inputs():
 def sum_logit_task():
     """logit = a + b - 1; of the training points only (3, 0) and (2, 2) are robust."""
 
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     linear = model.get_torch_model()[0]
     with torch.no_grad():
         linear.weight.fill_(1.0)

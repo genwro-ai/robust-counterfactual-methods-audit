@@ -66,10 +66,10 @@ def missing_capabilities(
     return set(required) - set(available)
 
 
-def predict_crisp(model: Classifier, values: np.ndarray) -> np.ndarray:
+def predict_crisp(model: Classifier, values) -> np.ndarray:
     """Hard labels at the 0.5 threshold, as a 1-D integer array."""
 
-    probability = model.predict(np.asarray(values)).iloc[:, 0].to_numpy()
+    probability = model.predict(values).iloc[:, 0].to_numpy()
     return (probability >= 0.5).astype(int)
 
 

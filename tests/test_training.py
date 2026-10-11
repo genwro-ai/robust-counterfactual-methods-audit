@@ -5,19 +5,19 @@ import pandas as pd
 import pytest
 import torch
 
-from robustness_benchmark.core.classifiers import TorchBinaryModel
+from robustness_benchmark.core.classifiers import MLPClassifier
 from robustness_benchmark.core.model_changes import (
+    FULL_VARIANTS_PER_FAMILY,
     make_bounded_parameter_change,
     make_changed_models,
-    make_update_replicas,
     parameter_linf_distance,
 )
-from robustness_benchmark.core.model_specs import (
-    FULL_VARIANTS_PER_FAMILY,
+from robustness_benchmark.core.model_specs import MLPSpec
+from robustness_benchmark.core.model_specs.mlp import (
     SGD_TRAINING_CONFIGS,
     TRAINING_CONFIGS,
-    MLPSpec,
 )
+from robustness_benchmark.methods.calibration import make_update_replicas
 
 
 class SmallSplit:
@@ -42,7 +42,7 @@ def test_training_configuration_grid_has_no_undertrained_sgd_settings():
 
 
 def test_bounded_parameter_change_reaches_declared_linf_radius():
-    base = TorchBinaryModel(input_dim=3, hidden_dim=(4,), seed=1)
+    base = MLPClassifier(input_dim=3, hidden_dim=(4,), seed=1)
 
     change = make_bounded_parameter_change(
         base,
@@ -56,14 +56,14 @@ def test_bounded_parameter_change_reaches_declared_linf_radius():
 
 
 def test_bounded_parameter_change_rejects_nonpositive_radius():
-    base = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=1)
+    base = MLPClassifier(input_dim=2, hidden_dim=(), seed=1)
 
     with pytest.raises(ValueError, match="positive"):
         make_bounded_parameter_change(base, radius=0.0, perturbation_seed=123)
 
 
 def test_apas_calibration_updates_copy_checkpoint_and_vary_only_update_sample():
-    base = TorchBinaryModel(input_dim=2, hidden_dim=(4,), seed=2026)
+    base = MLPClassifier(input_dim=2, hidden_dim=(4,), seed=2026)
     original = {
         name: value.detach().clone()
         for name, value in base.get_torch_model().state_dict().items()
@@ -97,9 +97,9 @@ def test_full_bank_has_25_unique_candidates_per_family(monkeypatch):
         return spec.build(X_train.shape[1], seed + zlib.crc32(repr(spec).encode()))
 
     monkeypatch.setattr(
-        "robustness_benchmark.core.model_changes.fit_spec", untrained_model
+        "robustness_benchmark.core.model_changes.families.fit_spec", untrained_model
     )
-    base = TorchBinaryModel(input_dim=2, hidden_dim=(32, 32), seed=2026)
+    base = MLPClassifier(input_dim=2, hidden_dim=(32, 32), seed=2026)
 
     changes = make_changed_models(
         SmallSplit(),
@@ -136,7 +136,7 @@ def test_rnce_calibration_follows_the_authors_incremental_protocol(tmp_path):
         X_test = SmallSplit.X_train
         y_test = SmallSplit.y_train
 
-    base = TorchBinaryModel(input_dim=2, hidden_dim=(4,), seed=2026)
+    base = MLPClassifier(input_dim=2, hidden_dim=(4,), seed=2026)
     replicas = make_update_replicas(
         Split(),
         base,
