@@ -40,14 +40,16 @@ def mutable_groups(schema: FeatureSchema) -> list[list[int]]:
 def resample_categories(
     candidates: np.ndarray, groups: list[list[int]], rng: np.random.Generator
 ) -> None:
-    """Move each group to another category with probability 1 / len(groups).
+    """Move each group to another category with probability 1 / (len(groups) + 1).
 
-    Every row keeps a valid one-hot encoding and changes one category on
-    average, the categorical analogue of a small numeric step.
+    Every row keeps a valid one-hot encoding and changes fewer than one
+    category on average, the categorical analogue of a small numeric step;
+    between a third and a half of the rows keep every category.
     """
 
+    probability = 1.0 / (len(groups) + 1)
     for group in groups:
-        rows = np.flatnonzero(rng.random(len(candidates)) < 1.0 / len(groups))
+        rows = np.flatnonzero(rng.random(len(candidates)) < probability)
         current = candidates[np.ix_(rows, group)].argmax(axis=1)
         chosen = (current + rng.integers(1, len(group), size=len(rows))) % len(group)
         candidates[np.ix_(rows, group)] = 0.0

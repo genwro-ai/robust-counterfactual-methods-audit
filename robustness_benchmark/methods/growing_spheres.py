@@ -2,9 +2,10 @@
 
 With a constrained FeatureSchema the sphere covers the mutable numeric columns
 only, immutable columns keep the instance's values, each mutable categorical
-feature is redrawn as a whole one-hot group (``resample_categories``), and
-candidates are projected (integer rounding) before they are scored. This
-extends the continuous-only original to mixed data.
+feature is redrawn as a whole one-hot group (``resample_categories``) once the
+sphere's radius reaches the length of a category change, and candidates are
+projected (integer rounding) before they are scored. This extends the
+continuous-only original to mixed data.
 """
 
 from collections.abc import Callable
@@ -102,7 +103,9 @@ def growing_spheres_search(
                 size=(n_search_samples, len(binary_indices)),
             )
 
-        if groups:
+        # A category change moves the one-hot columns by 2 ** (1 / p), so it
+        # enters the search once the sphere is that large.
+        if groups and high >= 2 ** (1 / p_norm):
             resample_categories(candidates, groups, rng)
 
         if feature_min is not None and feature_max is not None:
