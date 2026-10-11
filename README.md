@@ -34,16 +34,23 @@ time.
 
 ## Repository layout
 
-- `robustness_benchmark/core/`: datasets and the frozen split, the feature
-  schema, the classifiers (`classifiers/`: MLP, logistic regression, XGBoost),
-  per-class training and change rules (`model_specs.py`), base-model training
-  and selection (`fitting.py`), the model changes derived from a base model
-  (`model_changes.py`), the model-change bank, checkpoints and provenance
-- `robustness_benchmark/methods/`: one module per CFE method with its adapter,
-  the shared MILP encoding (`milp/`), method configuration and registry, and
-  the AP$\Delta$S and RNCE radius calibration (`calibration.py`)
+- `robustness_benchmark/core/`: the data (raw loaders in `datasets.py`, the
+  frozen split in `data.py`, the feature schema, factual selection), the
+  classifiers (`classifiers/`: MLP, logistic regression, XGBoost), how each
+  class is trained and changed (`model_specs/`), base-model training and
+  selection (`fitting.py`), the change families (`model_changes/`), the model
+  bank (`model_bank.py`), protocol constants (`protocol.py`) and checkpoints
+- `robustness_benchmark/methods/`: one module per CFE method with its adapter;
+  every setting and implementation ID in `configuration.py`, the factories in
+  `registry.py`, per-base-model calibration of radii and thresholds in
+  `calibration.py`, and the shared MILP encoding in `milp/`
 - `robustness_benchmark/evaluation/`: proximity and sparsity, plausibility,
-  robustness under model changes, aggregation, rank tests and figure style
+  robustness under model changes, aggregation and rank tests
+- `robustness_benchmark/benchmark/`: the protocol around the methods: tuning,
+  running and scoring a method on a base model, the store of finished runs,
+  and the benchmark summary
+- `robustness_benchmark/results/`: the results packet: loading, tables, rank
+  analyses, figures and the brief
 - `robustness_benchmark/cli/`: the three protocol commands (`model_bank`,
   `full_benchmark`, `results_packet`), a smoke test, and an appendix diagnostic
 - `data/`: the tabular datasets not shipped with scikit-learn
@@ -270,7 +277,7 @@ per model class (`paper_robustness_by_change_family_<model_type>`,
 `paper_metric_decomposition_<model_type>`, each as PDF and 300 dpi PNG), and
 `results_brief.md`.
 
-All figures share one style (`robustness_benchmark/evaluation/figure_style.py`):
+All figures share one style (`robustness_benchmark/results/figure_style.py`):
 - each method keeps the same colour and marker in every figure;
 - non-robust baselines are grey, and variants of one method share a hue;
 - robustness heatmaps use a single light-to-dark blue scale.

@@ -5,13 +5,13 @@ import pandas as pd
 import pytest
 from matplotlib.colors import to_hex
 
-from robustness_benchmark.evaluation.figure_style import INK, method_style
 from robustness_benchmark.evaluation.rank_tests import (
     InsufficientData,
     nemenyi_critical_difference,
-    plot_critical_difference,
     rank_test,
 )
+from robustness_benchmark.results.figure_style import INK, method_style
+from robustness_benchmark.results.figures import plot_critical_difference
 
 # A is best in every block; B and C swap only in b3.
 SCORES = {

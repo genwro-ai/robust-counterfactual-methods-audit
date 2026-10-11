@@ -9,7 +9,6 @@ from tqdm.auto import tqdm
 
 from robustness_benchmark.core.schema import CHANGE_TOLERANCE, FeatureSchema
 from robustness_benchmark.core.task import ClassificationTask, FrameDataset
-from robustness_benchmark.evaluation.proximity import GowerDistance
 from robustness_benchmark.methods.base import Generator
 from robustness_benchmark.methods.betarce import BetaRCEAdapter
 from robustness_benchmark.methods.configuration import (
@@ -252,6 +251,13 @@ def generate_counterfactuals(
     method_config: dict[str, object] | None = None,
     progress_description: str | None = None,
 ) -> tuple[pd.DataFrame, list[dict[str, object]]]:
+    """One counterfactual per factual, projected to a valid encoding.
+
+    Returns the counterfactuals (NaN rows where none was found) and one
+    generation row per factual: status, validity before and after the
+    projection, runtime and the method's own metadata.
+    """
+
     generator, kwargs = create_generator(method, task, generation_models, method_config)
     counterfactuals: list[pd.Series] = []
     records: list[dict[str, object]] = []
@@ -263,7 +269,6 @@ def generate_counterfactuals(
         if dataset_row_ids is not None
         else list(resolved_factual_ids)
     )
-    distance = GowerDistance(task.training_data.X, task.schema)
 
     factual_iterator = factuals.iterrows()
     if progress_description is not None:
@@ -331,7 +336,6 @@ def generate_counterfactuals(
             method_metadata = {}
         elapsed = perf_counter() - started
         counterfactuals.append(ce)
-        difference = np.abs(ce.to_numpy() - factual.to_numpy())
         records.append(
             {
                 "method": method,
@@ -345,11 +349,6 @@ def generate_counterfactuals(
                 "base_valid_before_projection": valid_before_projection,
                 "generation_error": error,
                 **method_metadata,
-                "l1_scaled_sum": float(np.nansum(difference)) if base_valid else None,
-                "l1_scaled_mean": float(np.nanmean(difference)) if base_valid else None,
-                "gower_distance": (
-                    float(distance(ce, factual)) if base_valid else None
-                ),
             }
         )
 

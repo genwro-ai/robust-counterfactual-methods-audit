@@ -13,6 +13,13 @@ def feature_range(X: pd.DataFrame) -> pd.Series:
     return span.where(span > 1e-8, 1.0)
 
 
+PROXIMITY_COLUMNS = (
+    "gower_distance",
+    "n_changed_features",
+    "fraction_changed_features",
+)
+
+
 class GowerDistance:
     """Gower's (1971) distance: the mean over raw features of a per-feature cost.
 
@@ -50,3 +57,43 @@ class GowerDistance:
 
         changed = np.abs(np.asarray(a, dtype=float) - np.asarray(b, dtype=float))
         return ((changed > CHANGE_TOLERANCE) @ self.membership > 0).sum(axis=-1)
+
+
+def proximity_metrics(
+    distance: GowerDistance,
+    factuals: pd.DataFrame,
+    counterfactuals: pd.DataFrame,
+    base_valid: list[bool],
+) -> list[dict[str, float | None]]:
+    """Gower distance and sparsity per counterfactual; None where it is invalid."""
+
+    rows: list[dict[str, float | None]] = []
+    for (_, factual), (_, counterfactual), valid in zip(
+        factuals.iterrows(), counterfactuals.iterrows(), base_valid, strict=True
+    ):
+        if not valid:
+            rows.append(dict.fromkeys(PROXIMITY_COLUMNS))
+            continue
+        x, cf = factual.to_numpy(dtype=float), counterfactual.to_numpy(dtype=float)
+        changed = float(distance.n_changed(cf, x))
+        rows.append(
+            {
+                "gower_distance": float(distance(cf, x)),
+                "n_changed_features": changed,
+                "fraction_changed_features": changed / distance.n_features,
+            }
+        )
+    return rows
+
+
+def proximity_summary(valid: pd.DataFrame) -> dict[str, float | None]:
+    """Means over base-valid rows."""
+
+    def mean(column: str) -> float | None:
+        values = pd.to_numeric(valid[column], errors="coerce").dropna()
+        return float(values.mean()) if len(values) else None
+
+    return {
+        "mean_gower_distance": mean("gower_distance"),
+        "mean_n_changed_features": mean("n_changed_features"),
+    }

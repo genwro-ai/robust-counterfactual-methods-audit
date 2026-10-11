@@ -8,8 +8,6 @@ from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.evaluation.proximity import GowerDistance
 
 METRIC_COLUMNS = (
-    "n_changed_features",
-    "fraction_changed_features",
     "knn_distance",
     "knn_distance_relative",
     "lof_inlier",
@@ -19,7 +17,7 @@ METRIC_COLUMNS = (
 
 
 class PlausibilityReference:
-    """Sparsity and data-support metrics against a base model's target region.
+    """Data-support metrics against a base model's target region.
 
     Built once per base model because the target-class set, scales and neighbour
     indices are shared by every method's counterfactuals. kNN distance, LOF and
@@ -71,10 +69,7 @@ class PlausibilityReference:
             )
 
     def evaluate(
-        self,
-        factuals: pd.DataFrame,
-        counterfactuals: pd.DataFrame,
-        base_valid: list[bool],
+        self, counterfactuals: pd.DataFrame, base_valid: list[bool]
     ) -> list[dict[str, object]]:
         """One metric row per counterfactual; invalid rows are NaN, never scored."""
 
@@ -84,14 +79,8 @@ class PlausibilityReference:
         rows: list[dict[str, object]] = [dict(empty) for _ in valid]
         if not valid.any():
             return rows
-        x = factuals.to_numpy(dtype=float)[valid]
-        cf = counterfactuals.to_numpy(dtype=float)[valid]
-        scaled_cf = cf / self.scale
-
-        n_changed = self.distance.n_changed(cf, x)
+        scaled_cf = counterfactuals.to_numpy(dtype=float)[valid] / self.scale
         results: dict[str, np.ndarray] = {
-            "n_changed_features": n_changed.astype(float),
-            "fraction_changed_features": n_changed / self.distance.n_features,
             "ynn": self.train_is_target[
                 self.all_neighbors.kneighbors(scaled_cf, return_distance=False)
             ].mean(axis=1),
@@ -130,7 +119,6 @@ def plausibility_summary(valid: pd.DataFrame) -> dict[str, float | None]:
         else None
     )
     return {
-        "mean_n_changed_features": mean("n_changed_features"),
         "mean_knn_distance": mean("knn_distance"),
         "mean_knn_distance_relative": mean("knn_distance_relative"),
         "lof_inlier_rate": mean("lof_inlier", inlier),

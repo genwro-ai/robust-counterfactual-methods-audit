@@ -6,7 +6,7 @@ from robustness_benchmark.core.model_bank import (
     stratify_severity,
 )
 from robustness_benchmark.core.model_changes import ChangedModel, behavioral_distance
-from robustness_benchmark.evaluation.aggregate import survival_summary
+from robustness_benchmark.evaluation.aggregate import change_survival_summary
 from robustness_benchmark.evaluation.robustness import evaluate_survival
 
 
@@ -119,13 +119,13 @@ def test_survival_summary_keeps_validity_and_conditioning_denominators():
             }
         )
 
-    summary = survival_summary(pd.DataFrame(rows))[0]
+    summary = change_survival_summary(pd.DataFrame(rows))[0]
 
     assert summary["total_n"] == 3
     assert summary["base_valid_pairs_n"] == 2
     assert summary["base_validity_rate"] == 2 / 3
     assert summary["conditional_eligible_n"] == 1
     assert summary["factual_eligibility_rate"] == 1 / 2
-    assert summary["conditional_survival"] == 1.0
+    assert summary["pooled_conditional_survival"] == 1.0
     assert summary["changed_validity_given_base_valid"] == 1.0
     assert summary["end_to_end_changed_validity"] == 2 / 3

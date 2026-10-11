@@ -1,6 +1,6 @@
 import pandas as pd
 
-from robustness_benchmark.evaluation.aggregate import aggregate_survival
+from robustness_benchmark.evaluation.aggregate import family_survival_summary
 
 
 def test_aggregate_weights_each_changed_model_once_for_model_level_metrics():
@@ -25,7 +25,7 @@ def test_aggregate_weights_each_changed_model_once_for_model_level_metrics():
                 }
             )
 
-    summary = aggregate_survival(pd.DataFrame(rows))[0]
+    summary = family_survival_summary(pd.DataFrame(rows))[0]
 
     assert summary["changed_models_n"] == 2
     assert summary["mean_changed_model_conditional_survival"] == 0.5

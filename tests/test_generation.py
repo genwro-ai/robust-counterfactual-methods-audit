@@ -307,7 +307,7 @@ def test_no_counterfactual_is_not_reported_as_an_exception(monkeypatch):
 
     assert records[0]["generation_status"] == "no_counterfactual"
     assert records[0]["generation_error"] is None
-    assert records[0]["l1_scaled_mean"] is None
+    assert records[0]["base_valid"] is False
 
 
 def test_factual_returned_unchanged_is_no_counterfactual(monkeypatch):

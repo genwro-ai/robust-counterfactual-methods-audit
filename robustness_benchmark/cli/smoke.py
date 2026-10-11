@@ -1,3 +1,5 @@
+"""Installation check: a small MLP, one change per family, a few factuals."""
+
 import argparse
 import json
 import sys
@@ -7,10 +9,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from robustness_benchmark.benchmark.run import run_method
 from robustness_benchmark.core.classifiers import MODEL_CLASSES
 from robustness_benchmark.core.data import load_dataset
 from robustness_benchmark.core.factuals import select_factuals
 from robustness_benchmark.core.fitting import fit_spec
+from robustness_benchmark.core.model_bank import (
+    base_model_id,
+    change_checkpoint_id,
+    ensemble_member_id,
+    register_checkpoint,
+)
 from robustness_benchmark.core.model_changes import (
     BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
     make_betarce_generation_ensemble,
@@ -18,24 +27,18 @@ from robustness_benchmark.core.model_changes import (
 )
 from robustness_benchmark.core.model_specs import MLPSpec
 from robustness_benchmark.core.protocol import EVALUATION_FACTUALS_SEED_OFFSET
-from robustness_benchmark.core.provenance import (
-    file_sha256,
-    row_id_value,
-    save_model_checkpoint,
-    write_json,
-)
+from robustness_benchmark.core.provenance import row_id_value, write_json
 from robustness_benchmark.evaluation.aggregate import (
+    change_survival_summary,
     generation_summary,
-    survival_summary,
 )
-from robustness_benchmark.evaluation.robustness import evaluate_survival
 from robustness_benchmark.methods.configuration import (
     METHODS,
     ROBX_METHODS,
     default_config,
     unsupported_methods,
 )
-from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
+from robustness_benchmark.methods.registry import make_task
 
 # APΔS, RNCE and RobX need per-base-model calibration, which only
 # full_benchmark performs; ROAR needs a linear model. Tuned methods use their
@@ -45,7 +48,7 @@ SMOKE_METHODS = tuple(
     method
     for method in METHODS
     if method not in CALIBRATED_METHODS
-    and method not in unsupported_methods([method], MODEL_CLASSES["mlp"].capabilities)
+    and not unsupported_methods([method], MODEL_CLASSES["mlp"].capabilities)
 )
 
 
@@ -64,12 +67,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    output = args.output
     data = load_dataset(args.dataset, seed=args.seed)
     spec = MLPSpec(hidden_dim=(16, 16), epochs=args.epochs)
     model = fit_spec(
         spec, data.X_train, data.y_train, data.X_val, data.y_val, seed=args.seed
     )
-    factuals, factual_ids, dataset_row_ids = select_factuals(
+    base_id = base_model_id(args.dataset, spec, args.seed)
+    factuals, factual_ids, row_ids = select_factuals(
         model,
         data.X_test,
         args.n_factuals,
@@ -78,222 +83,145 @@ def main() -> None:
     changes = make_changed_models(
         data, model, base_seed=args.seed, spec=spec, profile="smoke"
     )
-    generation_models = (
+    ensemble = (
         make_betarce_generation_ensemble(data, base_seed=args.seed, spec=spec)
         if "betarce" in args.methods
-        else None
+        else []
     )
-    base_model_id = f"{args.dataset}:{spec.id_fragment()}:seed_{args.seed}"
-    generation_rows: list[dict[str, object]] = []
-    survival_rows: list[dict[str, object]] = []
-    ce_tables: list[pd.DataFrame] = []
     task = make_task(
         model, data.X_train, data.y_train, seed=args.seed, schema=data.feature_schema
     )
 
+    generation, survival, counterfactuals = [], [], []
     for method in args.methods:
-        counterfactuals, method_generation = generate_counterfactuals(
+        run = run_method(
             method,
-            task,
-            factuals,
+            task=task,
+            factuals=factuals,
             factual_ids=factual_ids,
-            dataset_row_ids=dataset_row_ids,
-            generation_models=generation_models,
+            dataset_row_ids=row_ids,
+            changes=changes,
+            base_model_id=base_id,
+            X_reference=data.X_test,
+            y_reference=data.y_test,
             method_config=default_config(method),
+            generation_models=ensemble or None,
         )
-        for row in method_generation:
-            row["base_model_id"] = base_model_id
-        generation_rows.extend(method_generation)
-        base_valid = [bool(row["base_valid"]) for row in method_generation]
-        survival_rows.extend(
-            evaluate_survival(
-                method,
-                factuals,
-                counterfactuals,
-                changes,
-                model,
-                data.X_test,
-                data.y_test,
-                base_valid,
-                factual_ids,
-                dataset_row_ids,
-                base_model_id,
+        generation.extend(run.generation)
+        survival.extend(run.survival)
+        counterfactuals.append(
+            run.counterfactuals.assign(
+                method=method,
+                factual_id=factual_ids,
+                dataset_row_id=np.asarray(row_ids, dtype=object),
+                base_model_id=base_id,
             )
         )
-        table = counterfactuals.copy()
-        table.insert(0, "base_model_id", base_model_id)
-        table.insert(0, "dataset_row_id", np.asarray(dataset_row_ids, dtype=object))
-        table.insert(0, "factual_id", np.arange(len(table)))
-        table.insert(0, "method", method)
-        ce_tables.append(table)
 
-    args.output.mkdir(parents=True, exist_ok=True)
-    model_directory = args.output / "models"
-    base_checkpoint = model_directory / "base.pt"
-    save_model_checkpoint(
+    checkpoints: dict[str, dict[str, object]] = {}
+    models = output / "models"
+    register_checkpoint(
+        checkpoints,
+        base_id,
         model,
-        base_model_id,
-        base_checkpoint,
+        base_id,
+        models / "base.pt",
+        output,
         {"role": "base", "dataset": args.dataset, "training_seed": args.seed},
     )
-    checkpoint_paths: dict[str, dict[str, object]] = {
-        base_model_id: {
-            "path": "models/base.pt",
-            "sha256": file_sha256(base_checkpoint),
-            "bytes": base_checkpoint.stat().st_size,
-        }
-    }
     for position, change in enumerate(changes):
-        relative_path = (
-            Path("models") / f"change_{position:02d}_{change.change_family}.pt"
-        )
-        checkpoint_path = args.output / relative_path
-        save_model_checkpoint(
+        register_checkpoint(
+            checkpoints,
+            change_checkpoint_id(base_id, change.change_id),
             change.model,
             change.change_id,
-            checkpoint_path,
-            {
-                "role": "changed",
-                "base_model_id": base_model_id,
-                "family": change.change_family,
-                "level": change.change_level,
-                **change.metadata,
-            },
+            models / f"change_{position:02d}_{change.change_family}.pt",
+            output,
+            {"role": "changed", "base_model_id": base_id, **change.metadata},
         )
-        checkpoint_paths[change.change_id] = {
-            "path": str(relative_path),
-            "sha256": file_sha256(checkpoint_path),
-            "bytes": checkpoint_path.stat().st_size,
-        }
-    if generation_models is not None:
-        for member, generation_model in enumerate(generation_models):
-            ensemble_id = (
-                f"{base_model_id}/betarce_generation/"
-                f"{BETARCE_GENERATION_ENSEMBLE_PROTOCOL}/member_{member:02d}"
-            )
-            relative_path = (
-                Path("models")
-                / "betarce_generation"
-                / BETARCE_GENERATION_ENSEMBLE_PROTOCOL
-                / f"member_{member:02d}.pt"
-            )
-            checkpoint_path = args.output / relative_path
-            save_model_checkpoint(
-                generation_model,
-                ensemble_id,
-                checkpoint_path,
-                {
-                    "role": "generation_ensemble",
-                    "method": "betarce",
-                    "excluded_from_evaluation_changes": True,
-                    "member": member,
-                    "protocol": BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
-                    "initialization_seed": args.seed,
-                },
-            )
-            checkpoint_paths[ensemble_id] = {
-                "path": str(relative_path),
-                "sha256": file_sha256(checkpoint_path),
-                "bytes": checkpoint_path.stat().st_size,
-            }
+    protocol = BETARCE_GENERATION_ENSEMBLE_PROTOCOL
+    for member, generation_model in enumerate(ensemble):
+        member_id = ensemble_member_id(base_id, protocol, member)
+        register_checkpoint(
+            checkpoints,
+            member_id,
+            generation_model,
+            member_id,
+            models / "betarce_generation" / protocol / f"member_{member:02d}.pt",
+            output,
+            {"role": "generation_ensemble", "member": member, "protocol": protocol},
+        )
 
-    pd.DataFrame(generation_rows).to_parquet(
-        args.output / "generation.parquet", index=False
+    generation_frame = pd.DataFrame(generation)
+    generation_frame.to_parquet(output / "generation.parquet", index=False)
+    survival_frame = pd.DataFrame(survival)
+    survival_frame.to_parquet(output / "survival.parquet", index=False)
+    pd.concat(counterfactuals, ignore_index=True).to_parquet(
+        output / "counterfactuals.parquet", index=False
     )
-    pd.DataFrame(survival_rows).to_parquet(
-        args.output / "survival.parquet", index=False
+    factuals.assign(factual_id=factual_ids, dataset_row_id=row_ids).to_parquet(
+        output / "factuals.parquet", index=False
     )
-    pd.concat(ce_tables, ignore_index=True).to_parquet(
-        args.output / "counterfactuals.parquet", index=False
-    )
-    factual_table = factuals.copy()
-    factual_table.insert(0, "base_model_id", base_model_id)
-    factual_table.insert(0, "dataset_row_id", np.asarray(dataset_row_ids, dtype=object))
-    factual_table.insert(0, "factual_id", np.arange(len(factual_table)))
-    factual_table.to_parquet(args.output / "factuals.parquet", index=False)
-
-    generation = pd.DataFrame(generation_rows)
-    survival = pd.DataFrame(survival_rows)
+    created_at = datetime.now(UTC).isoformat()
     summary = {
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": created_at,
         "dataset": args.dataset,
         "seed": args.seed,
         "epochs": args.epochs,
+        "methods": args.methods,
         "requested_n_factuals": args.n_factuals,
         "actual_n_factuals": len(factuals),
-        "available_adverse_n": int((model.predict(data.X_test).iloc[:, 0] < 0.5).sum()),
-        "methods": args.methods,
         "base_test_accuracy": model.evaluate(data.X_test, data.y_test),
-        "behavior_reference_split": "test",
-        "generation": generation_summary(generation),
-        "survival": survival_summary(survival),
+        "generation": generation_summary(generation_frame),
+        "survival": change_survival_summary(survival_frame),
     }
-    write_json(args.output / "summary.json", summary)
-
-    split_ids = {
-        name: [row_id_value(value) for value in frame.index.tolist()]
-        for name, frame in {
-            "train": data.X_train,
-            "update": data.X_update,
-            "validation": data.X_val,
-            "test": data.X_test,
-        }.items()
-    }
-    manifest = {
-        "created_at": summary["created_at"],
-        "command": [
-            sys.executable,
-            "-m",
-            "robustness_benchmark.cli.smoke",
-            *sys.argv[1:],
-        ],
-        "configuration": {
+    write_json(output / "summary.json", summary)
+    write_json(
+        output / "manifest.json",
+        {
+            "created_at": created_at,
+            "command": [sys.executable, "-m", "robustness_benchmark.cli.smoke"]
+            + sys.argv[1:],
             "dataset": args.dataset,
             "dataset_source": data.source,
             "split_version": data.split_version,
-            "seed": args.seed,
-            "epochs": args.epochs,
-            "methods": args.methods,
-            "requested_n_factuals": args.n_factuals,
-            "adverse_label": data.adverse_label,
-            "favorable_label": data.favorable_label,
             "favorable_source_label": data.favorable_source_label,
-            "behavior_reference_split": "test",
-            "behavior_metrics": ["hard_disagreement", "probability_mae"],
-            "betarce_generation_ensemble_n": (
-                len(generation_models) if generation_models is not None else 0
-            ),
+            "base_model_id": base_id,
+            "changes": [
+                {
+                    "change_id": change.change_id,
+                    "family": change.change_family,
+                    "level": change.change_level,
+                    "metadata": change.metadata,
+                }
+                for change in changes
+            ],
+            "model_checkpoints": checkpoints,
+            "split_row_ids": {
+                name: [row_id_value(value) for value in frame.index]
+                for name, frame in {
+                    "train": data.X_train,
+                    "update": data.X_update,
+                    "validation": data.X_val,
+                    "test": data.X_test,
+                }.items()
+            },
         },
-        "base_model_id": base_model_id,
-        "changes": [
+    )
+    print(
+        json.dumps(
             {
-                "change_id": change.change_id,
-                "family": change.change_family,
-                "level": change.change_level,
-                "metadata": change.metadata,
-            }
-            for change in changes
-        ],
-        "model_checkpoints": checkpoint_paths,
-        "selected_factuals": [
-            {"factual_id": factual_id, "dataset_row_id": dataset_row_id}
-            for factual_id, dataset_row_id in zip(
-                factual_ids, dataset_row_ids, strict=True
-            )
-        ],
-        "split_row_ids": split_ids,
-    }
-    write_json(args.output / "manifest.json", manifest)
-    console_summary = {
-        "output": str(args.output.resolve()),
-        "base_test_accuracy": summary["base_test_accuracy"],
-        "actual_n_factuals": summary["actual_n_factuals"],
-        "available_adverse_n": summary["available_adverse_n"],
-        "generation_coverage": {
-            row["method"]: row["generation_coverage"] for row in summary["generation"]
-        },
-    }
-    print(json.dumps(console_summary, indent=2, sort_keys=True))
+                "output": str(output.resolve()),
+                "base_test_accuracy": summary["base_test_accuracy"],
+                "generation_coverage": {
+                    row["method"]: row["generation_coverage"]
+                    for row in summary["generation"]
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

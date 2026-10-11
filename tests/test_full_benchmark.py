@@ -3,11 +3,13 @@ import json
 import pandas as pd
 import pytest
 
-from robustness_benchmark.cli.full_benchmark import (
+from robustness_benchmark.benchmark.store import (
     BENCHMARK_PROTOCOL_VERSION,
-    configs_from_frozen_tuning,
     read_protocol_runs,
-    run_matches_config,
+    run_is_current,
+)
+from robustness_benchmark.benchmark.tuning import (
+    configs_from_frozen_tuning,
     selection_key,
     tuning_config_is_current,
     tuning_protocol_is_reusable,
@@ -207,27 +209,24 @@ def test_cached_run_must_match_bank_and_base_model(tmp_path):
         }
     ).to_parquet(survival_path)
 
-    assert run_matches_config(
-        generation_path,
-        survival_path,
+    assert run_is_current(
+        tmp_path,
         config,
         [42],
         {"change-1"},
         "base-1",
         "bank-1",
     )
-    assert not run_matches_config(
-        generation_path,
-        survival_path,
+    assert not run_is_current(
+        tmp_path,
         config,
         [42],
         {"change-1"},
         "base-1",
         "different-bank",
     )
-    assert not run_matches_config(
-        generation_path,
-        survival_path,
+    assert not run_is_current(
+        tmp_path,
         config,
         [42],
         {"change-1"},

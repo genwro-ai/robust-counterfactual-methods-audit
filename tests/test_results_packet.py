@@ -6,35 +6,43 @@ import pandas as pd
 import pytest
 from matplotlib.colors import to_hex
 
-from robustness_benchmark.cli import results_packet
-from robustness_benchmark.cli.results_packet import (
-    ALL_FAMILIES,
-    DATASETS,
-    FAMILY_ORDER,
-    MARGIN_METHODS,
-    METHOD_ORDER,
-    QUALITY_SUMMARY_COLUMNS,
-    cross_class_markdown,
-    cross_class_summary,
-    discover_runs,
+from robustness_benchmark.results import figures
+from robustness_benchmark.results.brief import write_brief
+from robustness_benchmark.results.figure_style import (
+    CATEGORICAL_HUES,
+    METHOD_STYLES,
+    method_style,
+)
+from robustness_benchmark.results.figures import (
     family_matrix,
-    format_column,
-    method_availability,
     plot_family_heatmaps,
     plot_metric_decomposition,
     plot_plausibility,
     plot_rank_diagrams,
     plot_tradeoff,
+)
+from robustness_benchmark.results.labels import (
+    DATASET_LABELS as DATASETS,
+)
+from robustness_benchmark.results.labels import (
+    FAMILY_ORDER,
+    MARGIN_METHODS,
+    METHOD_ORDER,
+)
+from robustness_benchmark.results.loading import discover_runs
+from robustness_benchmark.results.rank_analysis import (
+    ALL_FAMILIES,
     rank_diagram_stem,
     rank_test_table,
     run_rank_tests,
-    seed_summary,
-    write_brief,
 )
-from robustness_benchmark.evaluation.figure_style import (
-    CATEGORICAL_HUES,
-    METHOD_STYLES,
-    method_style,
+from robustness_benchmark.results.tables import (
+    QUALITY_SUMMARY_COLUMNS,
+    cross_class_markdown,
+    cross_class_summary,
+    format_column,
+    method_availability,
+    seed_summary,
 )
 
 XGBOOST_NOT_RUN = {"wachter", "apas", "rnce", "trex", "roar"}
@@ -277,9 +285,11 @@ def test_rank_tests_use_datasets_as_blocks():
     distance = results["distance", "mlp", ALL_FAMILIES]
     assert distance.n_blocks == len(DATASETS)
     assert not any(column.startswith("rank_gs_margin") for column in table.columns)
-    # skill grows along METHOD_ORDER, so distance (lower is better) favours the last
-    assert distance.average_ranks.index[0] == "growing_spheres"
-    assert main.average_ranks.index[0] == "growing_spheres"
+    # skill grows along METHOD_ORDER, so the last ranked method is best on
+    # robustness and on distance (lower is better)
+    best = [m for m in MODEL_METHODS["mlp"] if m not in MARGIN_METHODS[1:]][-1]
+    assert distance.average_ranks.index[0] == best
+    assert main.average_ranks.index[0] == best
     assert table.loc[table["scope"].eq("xgboost"), "rank_wachter"].isna().all()
 
 
@@ -405,17 +415,15 @@ def method_colours(figure) -> dict[str, str]:
 
 
 def test_colour_follows_the_method_not_the_subset_present(tmp_path, monkeypatch):
-    figures = []
-    monkeypatch.setattr(
-        results_packet, "save_figure", lambda figure, _: figures.append(figure)
-    )
+    drawn = []
+    monkeypatch.setattr(figures, "save_figure", lambda figure, _: drawn.append(figure))
     overall, _ = synthetic_results()
     dropped = ["wachter", "apas", "rbr", "kdtree"]
 
     plot_tradeoff(tmp_path, overall, "logistic")
     plot_tradeoff(tmp_path, overall[~overall["method"].isin(dropped)], "logistic")
 
-    full, partial = map(method_colours, figures)
+    full, partial = map(method_colours, drawn)
     expected = {style.label: style.color for style in METHOD_STYLES.values()}
     assert full.items() <= expected.items()
     assert partial.items() <= full.items()

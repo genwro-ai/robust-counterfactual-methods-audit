@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 import torch
 
+from robustness_benchmark.benchmark.run import score_generation
 from robustness_benchmark.core.classifiers import LogisticClassifier, MLPClassifier
 from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.evaluation.plausibility import PlausibilityReference
@@ -402,12 +403,8 @@ def test_mixed_distance_and_sparsity_on_a_hand_made_example():
 
     reference = PlausibilityReference(X, AllTarget(), schema=schema, k=1)
     (row,) = reference.evaluate(
-        pd.DataFrame([factual], columns=X.columns),
-        pd.DataFrame([counterfactual], columns=X.columns),
-        [True],
+        pd.DataFrame([counterfactual], columns=X.columns), [True]
     )
-    assert row["n_changed_features"] == 2
-    assert row["fraction_changed_features"] == pytest.approx(2 / 3)
     # Nearest training point is row 2: same job and sex, age 2 versus 3.
     assert row["knn_distance"] == pytest.approx(0.25 / 3)
 
@@ -437,15 +434,14 @@ def test_numeric_data_outputs_match_without_and_with_identity_schema():
     for method in (*methods, "roar_lime", "roar"):
         base = logistic if method == "roar" else model
         factuals = adverse(base, X)
-        outputs = [
-            generate_counterfactuals(
-                method,
-                make_task(base, X, y, seed=3, schema=schema),
-                factuals,
-                method_config=configs[method],
+        outputs = []
+        for schema in (None, identity):
+            task = make_task(base, X, y, seed=3, schema=schema)
+            counterfactuals, rows = generate_counterfactuals(
+                method, task, factuals, method_config=configs[method]
             )
-            for schema in (None, identity)
-        ]
+            score_generation(task, factuals, counterfactuals, rows)
+            outputs.append((counterfactuals, rows))
         (plain, plain_rows), (schematic, schematic_rows) = outputs
         np.testing.assert_array_equal(plain.to_numpy(), schematic.to_numpy())
         for row, other, (_, ce), (_, factual) in zip(
