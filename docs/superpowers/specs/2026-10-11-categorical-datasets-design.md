@@ -39,9 +39,10 @@ all-numeric, all-mutable one, so existing results are unchanged.
     choice documented.
 - The split protocol (50/10/10/30) and the label contract (0 = adverse) are
   unchanged.
-- Data-correction shift: diff the Statlog release (UCI 144) against South German
-  row by row, and report whether stored values differ, not just code meanings.
-  Integration into the bank is decided after that report.
+- Data-correction shift: the Statlog release (UCI 144) and South German differ
+  in stored values in 53 of 1,000 rows, with no label changes. Too light for a
+  change family of its own; it is reported in the paper as a real-world
+  correction (`cli/german_correction_diff.py`).
 
 ## Methods with categorical features (agent 2)
 
@@ -53,8 +54,10 @@ all-numeric, all-mutable one, so existing results are unchanged.
     are masked from updates. Projection follows the search.
   - Sampling methods (growing spheres, BetaRCE, RobX): immutable columns are
     never perturbed, and categories are sampled as whole groups.
-  - KD-tree and RNCE: candidate training points must share the factual's
-    immutable values.
+  - KD-tree and RNCE: each candidate training point takes the factual's
+    immutable values and is kept only if the model still accepts it (KD-tree)
+    or it is certified again (RNCE). Exact matching on immutables left 68% of
+    Adult factuals with no candidate.
   - MILP (RNCE robustness check, MCE inside AP∆S): one-hot groups are binary
     variables summing to 1, and immutable inputs are fixed.
 - **Distance:** a Gower-style mean over raw features. Numeric features use

@@ -43,7 +43,8 @@ time.
 ## Protocol
 
 The protocol has three steps per dataset. `<dataset>` is one of
-`breast_cancer`, `diabetes`, `wine_quality`, `heloc`. Every command is
+`breast_cancer`, `diabetes`, `wine_quality`, `heloc`, `german_credit`,
+`adult`, `taiwan_default`. Every command is
 deterministic given its seeds. `full_benchmark` reuses finished runs found in
 its output directory, so an interrupted benchmark can be resumed with the same
 command.
@@ -188,6 +189,23 @@ Method settings (`robustness_benchmark/methods/configuration.py`):
 Wachter, RNCE, AP$\Delta$S, and T:Rex need gradients or network weights and do
 not run on XGBoost; ROAR needs a linear model.
 
+*Categorical and immutable features.* Each dataset's `FeatureSchema`
+(`core/schema.py`) reaches every method through `task.schema`. A
+counterfactual changes mutable features only:
+- Gradient methods zero the gradients of immutable features.
+- Sampling methods (growing spheres, BetaRCE, RobX) never perturb them and
+  redraw categories as whole one-hot groups.
+- KD-tree and RNCE give each candidate training point the factual's immutable
+  values and keep it only if it is still accepted (KD-tree) or still certified
+  (RNCE).
+- The AP$\Delta$S MILP encodes one-hot groups as binaries and integer features
+  as integers.
+
+Every counterfactual is then projected to a valid encoding before validity is
+checked: immutable features copied from the factual, one-hot groups snapped,
+integers rounded. `projection_changed` records whether that changed it. On
+all-numeric datasets every output is identical to earlier runs.
+
 Calibration models, the BetaRCE ensemble, and tuning data are never part of
 the evaluation bank. Outputs per seed and method are written to
 `runs/seed_<seed>/<method>/` as Parquet files (`factuals`, `counterfactuals`,
@@ -216,6 +234,18 @@ figures per model class (`paper_robustness_by_change_family_<model_type>.pdf`,
 confidence-margin baselines are drawn as one dashed curve in the trade-off
 plots.
 
+The packet also writes:
+- `cross_class_summary.md/csv`: mean empirical robustness, end-to-end
+  robustness, and distance per method and model class, with n/a where not run.
+- A robustness-versus-plausibility figure per model class
+  (`paper_robustness_plausibility_<model_type>`).
+- Rank tests: a Friedman test with Nemenyi critical-difference diagrams
+  (Demšar 2006) for empirical robustness, end-to-end robustness, and distance,
+  per model class and across the methods that run on all three. Blocks in
+  which a compared method is missing are dropped and counted, and the
+  confidence-margin baselines are excluded. Results are in `rank_tests.csv`
+  and `critical_difference_<metric>_<scope>.pdf`.
+
 ## Metrics
 
 - **Coverage**: fraction of requests for which a method returns a finite
@@ -228,12 +258,14 @@ plots.
 - **End-to-end robustness**: coverage × base validity × empirical
   robustness, i.e. the fraction of requests that yield a CFE that is valid for
   the base model and remains valid after the change.
-- **Distance**: mean per-feature $\ell_1$ change on standardized features,
-  each divided by the feature's training median absolute deviation (standard
-  deviation when the MAD is zero).
+- **Distance**: a Gower-style mean over raw features. A numeric feature
+  contributes its standardized change divided by its training median absolute
+  deviation (standard deviation when the MAD is zero); a categorical feature
+  contributes 1 if its category changes. On all-numeric data this is the
+  scaled $\ell_1$ distance of the paper.
 
-- **Sparsity**: number (and fraction) of features changed by more than
-  $10^{-6}$.
+- **Sparsity**: number (and fraction) of raw features changed by more than
+  $10^{-6}$; a one-hot group counts once.
 - **Plausibility**, all computed from the base model and training data only:
   - *kNN distance*: mean distance, scaled as for proximity, to the five
     nearest training points the base model predicts as the target class;
@@ -257,6 +289,32 @@ Diabetes, Wine Quality, and HELOC are read from `data/`. Labels are mapped so
 that 0 is the adverse and 1 the favorable outcome. For HELOC, the three
 features with extensive special-value missingness are removed first, followed
 by rows that still contain a negative sentinel (8,291 rows, 20 features).
+
+Three datasets with categorical features come from the UCI Machine Learning
+Repository (CC BY 4.0; provenance and SHA-256 in `THIRD_PARTY_NOTICES.md`):
+
+| Dataset | Source | Rows | Favorable label |
+|---|---|---|---|
+| `german_credit` | South German Credit (Grömping 2019), the corrected release of Statlog German Credit | 1,000 | good credit risk |
+| `adult` | UCI Adult; train and test files combined, rows with missing values dropped | 10,000 of 45,222 | income >50K |
+| `taiwan_default` | Default of Credit Card Clients (Yeh & Lien 2009) | 10,000 of 30,000 | no default next month |
+
+- Adult and Taiwan default are subsampled (stratified, seed 2026) before the
+  frozen split, so that runtimes stay comparable with HELOC.
+- On Adult, `fnlwgt` and `education` are removed (`education-num` is kept) and
+  `native-country` is reduced to United-States vs other. On Taiwan default,
+  undocumented EDUCATION and MARRIAGE codes are merged into "other".
+- Nominal features are one-hot encoded as `<feature>=<category>` columns and
+  are not standardized. Numeric and ordered features are standardized with
+  training statistics and treated as integers.
+- Immutable features follow CARLA, MACE, and Ustun et al. (2019): age,
+  sex/personal status, race, nationality (native country, foreign worker), and
+  marital status (marital status and relationship on Adult).
+
+`python -m robustness_benchmark.cli.german_correction_diff` compares Statlog
+German Credit with South German Credit. After aligning rows on duration,
+amount, and age, 53 of 1,000 rows differ in stored values (amount, age, other
+installment plans, housing, foreign worker), and no labels differ.
 
 ## Optional commands
 

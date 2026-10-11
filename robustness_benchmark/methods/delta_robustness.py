@@ -1,7 +1,9 @@
 from gurobipy import GRB, Model
 
 from robustness_benchmark.core.task import ClassificationTask
-from robustness_benchmark.methods.model_change_evaluator import ModelChangesRobustnessEvaluator
+from robustness_benchmark.methods.model_change_evaluator import (
+    ModelChangesRobustnessEvaluator,
+)
 from robustness_benchmark.methods.optimization import OptSolver
 
 

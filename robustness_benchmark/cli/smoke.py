@@ -23,7 +23,10 @@ from robustness_benchmark.core.training import (
     make_changed_models,
 )
 from robustness_benchmark.evaluation.metrics import evaluate_survival
-from robustness_benchmark.evaluation.summaries import generation_summary, survival_summary
+from robustness_benchmark.evaluation.summaries import (
+    generation_summary,
+    survival_summary,
+)
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
 
 

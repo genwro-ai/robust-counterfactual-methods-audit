@@ -68,8 +68,9 @@ class RNCE(CEGenerator):
             robustInit, delta, bias_delta, column_name=column_name, neg_value=neg_value
         )
         if self.task.schema.immutable and not S.empty:
-            # Only robust training points that share the factual's immutables.
-            S = S[matches_immutable(S, x, self.task.schema)]
+            return self._nearest_robust_keeping_immutables(
+                S, x, delta, bias_delta, neg_value
+            )
         if S.empty:
             print("No instance in the dataset is robust for the given perturbations!")
             return pd.DataFrame(x).T
@@ -82,6 +83,28 @@ class RNCE(CEGenerator):
         else:
             res = pd.DataFrame(S.iloc[idxs[0]]).T
         return res
+
+    def _nearest_robust_keeping_immutables(self, S, x, delta, bias_delta, neg_value):
+        """Nearest robust candidate after it takes the factual's immutable values.
+
+        A candidate whose immutable values change is certified again, so the
+        returned point is always the one certified.
+        """
+
+        schema = self.task.schema
+        factual = x.to_numpy(dtype=float)
+        moved = schema.project(S.to_numpy(dtype=float), factual)
+        unchanged = matches_immutable(S, factual, schema)
+        for index in np.argsort(np.linalg.norm(moved - factual, axis=1), kind="stable"):
+            candidate = pd.Series(moved[index], index=S.columns)
+            if unchanged[index] or self.intabs.evaluate(
+                candidate,
+                delta=delta,
+                bias_delta=bias_delta,
+                desired_output=1 - neg_value,
+            ):
+                return candidate.to_frame().T
+        return pd.DataFrame(x).T
 
     @lru_cache  # noqa: B019 - retained from RobustX; one generator per task
     def getCandidates(

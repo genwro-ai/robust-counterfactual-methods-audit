@@ -253,7 +253,7 @@ def test_milp_encodes_groups_immutables_and_integers():
     assert model.predict_single(solution) == 1
 
 
-def test_kdtree_only_returns_neighbours_sharing_immutables():
+def test_kdtree_keeps_the_factuals_immutables():
     schema = FeatureSchema(
         columns=("a", "sex_f", "sex_m"),
         categorical={"sex": ("sex_f", "sex_m")},
@@ -270,11 +270,12 @@ def test_kdtree_only_returns_neighbours_sharing_immutables():
     task = make_task(model, X, pd.Series([1, 1, 0]), seed=0, schema=schema)
     generator = KDTreeNNCE(task)
 
-    # The nearest positive point (a=1) is male; the female factual gets a=3.
+    # The nearest positive point (a=1) is male; it takes the factual's sex and
+    # stays positive, so the female factual gets a=1 rather than a=3.
     female = pd.Series({"a": -1.0, "sex_f": 1.0, "sex_m": 0.0})
     ce = generator.generate_for_instance(female).iloc[0]
 
-    assert ce.tolist() == [3.0, 1.0, 0.0]
+    assert ce.tolist() == [1.0, 1.0, 0.0]
 
 
 def test_mixed_distance_and_sparsity_on_a_hand_made_example():

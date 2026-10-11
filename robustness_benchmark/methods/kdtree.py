@@ -1,7 +1,8 @@
 """Nearest-neighbour counterfactuals among target-class training points.
 
-Candidates must share the factual's immutable values; training points are
-already valid encodings.
+With immutable features, each candidate takes the factual's immutable values
+and is kept only if the model still assigns it the target class, so the
+counterfactual changes mutable features only, as for every other method.
 """
 
 import numpy as np
@@ -9,7 +10,6 @@ import pandas as pd
 from sklearn.neighbors import KDTree
 
 from robustness_benchmark.methods.ce_generator import CEGenerator
-from robustness_benchmark.methods.feature_constraints import matches_immutable
 
 
 class KDTreeNNCE(CEGenerator):
@@ -57,9 +57,11 @@ class KDTreeNNCE(CEGenerator):
         else:
             positive_instances = positive_instances[idxs_0]
         if self.task.schema.immutable:
-            positive_instances = positive_instances[
-                matches_immutable(positive_instances, instance, self.task.schema)
-            ]
+            positive_instances = self.task.schema.project(
+                positive_instances, instance.to_numpy(dtype=float)
+            )
+            accepted = model.predict(positive_instances).iloc[:, 0].to_numpy() >= 0.5
+            positive_instances = positive_instances[accepted == bool(nnce_y)]
 
         # If there are no positive instances, return None
         if len(positive_instances) == 0:
