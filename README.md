@@ -203,7 +203,12 @@ counterfactual changes mutable features only:
 
 Every counterfactual is then projected to a valid encoding before validity is
 checked: immutable features copied from the factual, one-hot groups snapped,
-integers rounded. `projection_changed` records whether that changed it. On
+integers rounded. `projection_changed` records whether that changed it.
+
+The gradient methods (Wachter, T:Rex, ROAR, ROAR-LIME, RBR) judge validity at
+the projected point during search, rather than at the continuous iterate. T:Rex
+also judges stability there. Each returns the projected point it tested, with
+its objective and update rule unchanged. On
 all-numeric datasets every output is identical to earlier runs.
 
 Calibration models, the BetaRCE ensemble, and tuning data are never part of
