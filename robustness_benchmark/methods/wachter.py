@@ -2,6 +2,9 @@
 
 Immutable columns get zero gradient, so Adam leaves them at the factual's
 values; one-hot and integer validity come from projection after the search.
+
+Deviation on constrained schemas: the search stops once the projected iterate
+is classified as the target, and returns that projected point.
 """
 
 import datetime
@@ -13,6 +16,10 @@ from torch.autograd import Variable
 from torch.optim import Adam
 
 from robustness_benchmark.methods.ce_generator import CEGenerator
+from robustness_benchmark.methods.feature_constraints import (
+    search_projection,
+    valid_projection,
+)
 
 WACHTER_DEFAULTS: dict[str, object] = {
     "max_allowed_minutes": 0.05,
@@ -109,6 +116,8 @@ class Wachter(CEGenerator):
             wac_valid = True
 
         frozen = self.task.schema.immutable_columns()
+        project = search_projection(self.task.schema, instance.to_numpy())
+        projected = None
 
         # set maximum allowed time for computing 1 counterfactual
         t0 = datetime.datetime.now(datetime.UTC)
@@ -125,19 +134,23 @@ class Wachter(CEGenerator):
             optimiser.step()
 
             # break conditions
-            p = class_prob[0].item()
-            if (neg_value and p + epsilon < 0.5) or (
-                not neg_value and p - epsilon >= 0.5
-            ):
-                wac_valid = True
+            if project is not None:
+                projected = valid_projection(
+                    self.task.model, project, wac.detach().numpy(), 1 - neg_value
+                )
+                wac_valid = projected is not None
+            else:
+                p = class_prob[0].item()
+                if (neg_value and p + epsilon < 0.5) or (
+                    not neg_value and p - epsilon >= 0.5
+                ):
+                    wac_valid = True
             if datetime.datetime.now(datetime.UTC) - t0 > t_max:
                 break
             iterations += 1
 
+        if projected is not None:
+            return pd.DataFrame([projected], columns=instance.index)
         res = pd.DataFrame(wac.detach().numpy()).T
         res.columns = instance.index
-        # if not self.task.model.predict_single(res.T):
-        #     print("Failed!")
-        #     pd.DataFrame(instance)
-
         return res
