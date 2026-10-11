@@ -1,3 +1,12 @@
+"""MILP encoding of an (interval-abstracted) ReLU network for Gurobi.
+
+With free inputs (MCE inside AP-Delta-S), the FeatureSchema is encoded exactly:
+immutable inputs are fixed to the instance, each mutable one-hot group is a
+set of binary variables summing to 1, and each integer feature is an integer
+variable in raw units linked to its standardized input. Fixed inputs (RNCE's
+robustness check of training points) are valid encodings already.
+"""
+
 import pandas as pd
 from gurobipy import GRB, Model
 from gurobipy.gurobipy import quicksum
@@ -89,6 +98,10 @@ class OptSolver:
                 )
 
         else:
+            schema = self.task.schema
+            immutable = set(schema.immutable_columns())
+            one_hot = {i for group in schema.one_hot_groups().values() for i in group}
+            integer = dict(zip(schema.indices(schema.integer), schema.integer))
             # Create the Gurobi variables for the inputs
             for i, col in enumerate(self.task.training_data.X.columns):
                 key = f"v_0_{i}"
@@ -98,10 +111,24 @@ class OptSolver:
                 col_max = self.task.training_data.X[col].max()
 
                 # Use the calculated min and max for the bounds of the variable
+                if i in immutable:
+                    col_min = col_max = ilist[i]
                 self.inputNodes[key] = self.gurobiModel.addVar(
-                    lb=col_min, ub=col_max, name=key
+                    lb=col_min,
+                    ub=col_max,
+                    vtype=GRB.BINARY if i in one_hot - immutable else GRB.CONTINUOUS,
+                    name=key,
                 )
                 all_nodes[key] = self.inputNodes[key]
+                if i in integer and i not in immutable:
+                    mean, scale = schema.numeric_scale[integer[i]]
+                    raw = self.gurobiModel.addVar(
+                        lb=round(float(col_min) * scale + mean),
+                        ub=round(float(col_max) * scale + mean),
+                        vtype=GRB.INTEGER,
+                        name=f"raw_{i}",
+                    )
+                    self.gurobiModel.addConstr(raw == mean + scale * all_nodes[key])
 
                 if delta > 0:
                     max_magnitude = max(abs(float(col_min)), abs(float(col_max)))
@@ -113,6 +140,13 @@ class OptSolver:
                     self.gurobiModel.addConstr(magnitude >= all_nodes[key])
                     self.gurobiModel.addConstr(magnitude >= -all_nodes[key])
                     input_magnitudes[key] = magnitude
+
+            for feature, group in schema.one_hot_groups().items():
+                if feature not in schema.immutable:
+                    self.gurobiModel.addConstr(
+                        quicksum(self.inputNodes[f"v_0_{i}"] for i in group) == 1,
+                        name=f"one_hot_{feature}",
+                    )
 
         self.gurobiModel.update()
 

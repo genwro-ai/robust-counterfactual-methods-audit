@@ -1,3 +1,9 @@
+"""Wachter et al. (2017) gradient counterfactuals.
+
+Immutable columns get zero gradient, so Adam leaves them at the factual's
+values; one-hot and integer validity come from projection after the search.
+"""
+
 import datetime
 
 import pandas as pd
@@ -102,6 +108,8 @@ class Wachter(CEGenerator):
         if y_target == 0 and class_prob < 0.5 or y_target == 1 and class_prob >= 0.5:
             wac_valid = True
 
+        frozen = self.task.schema.immutable_columns()
+
         # set maximum allowed time for computing 1 counterfactual
         t0 = datetime.datetime.now(datetime.UTC)
         t_max = datetime.timedelta(minutes=max_allowed_minutes)
@@ -112,6 +120,8 @@ class Wachter(CEGenerator):
             class_prob = self.task.model.predict_proba_tensor(wac)
             wac_loss = validity_loss(class_prob, y_target) + lamb * cost_loss(x, wac)
             wac_loss.sum().backward()
+            if frozen:
+                wac.grad[frozen] = 0.0
             optimiser.step()
 
             # break conditions

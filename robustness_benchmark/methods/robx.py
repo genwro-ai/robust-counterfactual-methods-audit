@@ -1,9 +1,26 @@
+"""RobX (Dutta et al., ICML 2022) on top of growing spheres.
+
+With a constrained FeatureSchema, the start counterfactual comes from
+schema-aware growing spheres, conservative points are training points that
+share the factual's immutable values, and each interpolated iterate is
+projected before its stability is tested, so the returned point is the one
+tested. Stability itself keeps the paper's isotropic Gaussian noise on every
+input column: the noisy points probe the model and are never returned, and tau
+is calibrated with the same estimator.
+"""
+
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import numpy as np
 
+from robustness_benchmark.core.schema import FeatureSchema
+from robustness_benchmark.methods.feature_constraints import (
+    is_constrained,
+    matches_immutable,
+)
 from robustness_benchmark.methods.growing_spheres import growing_spheres_search
 
 
@@ -229,6 +246,7 @@ def robx_algorithm(
     robx_lambda: float = 0.1,
     gamma: float = 0.5,
     rng: np.random.Generator | None = None,
+    project: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
     if rng is None:
         rng = np.random.default_rng()
@@ -263,8 +281,9 @@ def robx_algorithm(
         counterfactuals = (
             robx_lambda * conservative_cfs + (1.0 - robx_lambda) * counterfactuals
         )
+        candidates = counterfactuals if project is None else project(counterfactuals)
         stabilities = _counterfactual_stability_batch(
-            counterfactuals,
+            candidates,
             predict_class_proba_fn,
             variance,
             N,
@@ -273,7 +292,7 @@ def robx_algorithm(
         )
         stable_mask = stabilities > tau
         if np.any(stable_mask):
-            return counterfactuals[np.argmax(stable_mask)], conservative_cfs
+            return candidates[np.argmax(stable_mask)], conservative_cfs
 
     return None, None
 
@@ -295,8 +314,10 @@ class RobX:
         binary_indices: list[int] | None = None,
         feature_min: np.ndarray | None = None,
         feature_max: np.ndarray | None = None,
+        schema: FeatureSchema | None = None,
     ) -> None:
         self.X_train = np.asarray(X_train)
+        self.schema = schema
         self.predict_fn_crisp = predict_fn_crisp
         self.predict_proba_fn = predict_proba_fn
         self.binary_indices = binary_indices
@@ -344,6 +365,7 @@ class RobX:
             feature_min=self.feature_min,
             feature_max=self.feature_max,
             rng=rng,
+            schema=self.schema,
         )
 
         if start_cf is None:
@@ -352,8 +374,14 @@ class RobX:
         def predict_target_proba(X):
             return self._predict_target_proba(X, target_class)
 
+        X_conservative, project = self.X_train, None
+        if is_constrained(self.schema):
+            X_conservative = self.X_train[
+                matches_immutable(self.X_train, start_instance, self.schema)
+            ]
+            project = partial(self.schema.project, factual=start_instance)
         robust_cf, conservative_cfs = robx_algorithm(
-            self.X_train,
+            X_conservative,
             predict_target_proba,
             start_cf,
             variance=variance,
@@ -364,6 +392,7 @@ class RobX:
             robx_lambda=robx_lambda,
             gamma=gamma,
             rng=rng,
+            project=project,
         )
 
         status = "ok" if robust_cf is not None else "no_robust_cf"

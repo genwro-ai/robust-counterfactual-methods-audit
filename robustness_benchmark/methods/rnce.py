@@ -7,6 +7,7 @@ from sklearn.neighbors import KDTree
 from robustness_benchmark.core.task import ClassificationTask
 from robustness_benchmark.methods.ce_generator import CEGenerator
 from robustness_benchmark.methods.delta_robustness import DeltaRobustnessEvaluator
+from robustness_benchmark.methods.feature_constraints import matches_immutable
 
 RNCE_INTERVAL_ENCODING = "sign_aware_first_layer_v2"
 
@@ -66,6 +67,9 @@ class RNCE(CEGenerator):
         S = self.getCandidates(
             robustInit, delta, bias_delta, column_name=column_name, neg_value=neg_value
         )
+        if self.task.schema.immutable and not S.empty:
+            # Only robust training points that share the factual's immutables.
+            S = S[matches_immutable(S, x, self.task.schema)]
         if S.empty:
             print("No instance in the dataset is robust for the given perturbations!")
             return pd.DataFrame(x).T

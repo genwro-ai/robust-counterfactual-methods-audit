@@ -763,7 +763,9 @@ def main() -> None:
             seed=int(base_seed),
             schema=data.feature_schema,
         )
-        plausibility = PlausibilityReference(data.X_train, base_model)
+        plausibility = PlausibilityReference(
+            data.X_train, base_model, schema=data.feature_schema
+        )
         seed_configs = resolve_robx_seed_configs(
             configs,
             methods,

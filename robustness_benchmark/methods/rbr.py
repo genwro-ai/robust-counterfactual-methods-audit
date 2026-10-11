@@ -1,3 +1,12 @@
+"""RBR (Nguyen et al., NeurIPS 2022) through the authors' implementation.
+
+Immutable columns are masked out of the search: the boundary line search walks
+towards training points carrying the factual's immutable values, and the
+projected gradient steps leave those columns at zero gradient. The ambiguity
+samples around the boundary point only shape the loss. Projection after the
+search restores one-hot and integer validity.
+"""
+
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import pdist
@@ -68,6 +77,7 @@ class RBRAdapter:
             max_iter=self.maximum_iterations,
             random_state=self.seed,
             device="cpu",
+            frozen=task.schema.immutable_columns(),
         )
         self.last_metadata: dict[str, object] = {}
 

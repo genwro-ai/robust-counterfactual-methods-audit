@@ -19,8 +19,10 @@ class RBR:
         max_iter=1000,
         random_state=None,
         device="cuda",
+        frozen=None,
     ):
         self.random_state = check_random_state(random_state)
+        self.frozen = list(frozen or [])
         self.model = model
         self.max_iter = max_iter
         self.y_target = y_target
@@ -49,6 +51,9 @@ class RBR:
         x_cfact_list = self.train_data[order[self.train_label[order] == (1 - x_label)]][
             :k
         ]
+        if self.frozen:
+            x_cfact_list = x_cfact_list.clone()
+            x_cfact_list[:, self.frozen] = x[self.frozen]
         best_x_b = None
         best_dist = torch.tensor(float("inf"))
 
@@ -121,6 +126,8 @@ class RBR:
             F, pe, op = loss_fn(x_t)
 
             F.backward()
+            if self.frozen:
+                x_t.grad[self.frozen] = 0.0
             if verbose:
                 print(f"Iteration {t + 1}/{self.max_iter}")
                 print(x_t)

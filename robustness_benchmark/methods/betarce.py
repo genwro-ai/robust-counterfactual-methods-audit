@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 from scipy import stats
 
+from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.methods.growing_spheres import growing_spheres_search
 
 
@@ -62,8 +63,10 @@ class BetaRCE:
         binary_indices: list[int] | None = None,
         feature_min: np.ndarray | None = None,
         feature_max: np.ndarray | None = None,
+        schema: FeatureSchema | None = None,
     ) -> None:
         self.predict_fn_crisp = predict_fn_crisp
+        self.schema = schema
         self.estimators_crisp = estimators_crisp
         self.binary_indices = binary_indices
         self.feature_min = feature_min
@@ -127,6 +130,7 @@ class BetaRCE:
             feature_min=self.feature_min,
             feature_max=self.feature_max,
             rng=rng,
+            schema=self.schema,
         )
 
         if cf is None:
