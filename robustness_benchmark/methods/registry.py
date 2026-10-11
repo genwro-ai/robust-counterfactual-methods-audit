@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
+from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.core.task import ClassificationTask, FrameDataset
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION, APASAdapter
 from robustness_benchmark.methods.configuration import (
@@ -61,8 +62,16 @@ def _check_implementation(config: dict[str, object], name: str, expected: str) -
         )
 
 
-def make_task(model, X_train: pd.DataFrame, y_train: pd.Series, seed: int):
-    return ClassificationTask(model, FrameDataset(X_train, y_train, seed=seed))
+def make_task(
+    model,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    seed: int,
+    schema: FeatureSchema | None = None,
+):
+    return ClassificationTask(
+        model, FrameDataset(X_train, y_train, seed=seed, schema=schema)
+    )
 
 
 def create_generator(

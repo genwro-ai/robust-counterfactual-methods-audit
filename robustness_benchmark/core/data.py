@@ -7,6 +7,8 @@ from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
+from robustness_benchmark.core.schema import FeatureSchema
+
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 
 HELOC_DROPPED_FEATURES = (
@@ -52,6 +54,11 @@ class DatasetSplit:
     y_test: pd.Series
     adverse_label: int = 0
     favorable_label: int = 1
+    schema: FeatureSchema | None = None
+
+    @property
+    def feature_schema(self) -> FeatureSchema:
+        return self.schema or FeatureSchema.numeric_only(self.X_train.columns)
 
     def __post_init__(self) -> None:
         if (self.adverse_label, self.favorable_label) != (0, 1):
@@ -142,6 +149,15 @@ def load_dataset(
         y_val=y_val.rename("target"),
         X_test=_frame(scaler.transform(X_test), columns, X_test.index),
         y_test=y_test.rename("target"),
+        schema=FeatureSchema(
+            columns=tuple(columns),
+            numeric_scale={
+                column: (float(mean), float(scale))
+                for column, mean, scale in zip(
+                    columns, scaler.mean_, scaler.scale_, strict=True
+                )
+            },
+        ),
     )
 
 

@@ -147,7 +147,13 @@ def tune_methods(
     factuals, _, _ = select_factuals(
         base_model, data.X_val, tuning_factuals, seed=base_seed + 70_000
     )
-    task = make_task(base_model, data.X_train, data.y_train, seed=base_seed)
+    task = make_task(
+        base_model,
+        data.X_train,
+        data.y_train,
+        seed=base_seed,
+        schema=data.feature_schema,
+    )
     report: dict[str, object] = {
         "protocol": {
             "base_seed": base_seed,
@@ -750,7 +756,13 @@ def main() -> None:
             args.n_factuals,
             seed=int(base_seed) + 30_000,
         )
-        task = make_task(base_model, data.X_train, data.y_train, seed=int(base_seed))
+        task = make_task(
+            base_model,
+            data.X_train,
+            data.y_train,
+            seed=int(base_seed),
+            schema=data.feature_schema,
+        )
         plausibility = PlausibilityReference(data.X_train, base_model)
         seed_configs = resolve_robx_seed_configs(
             configs,
