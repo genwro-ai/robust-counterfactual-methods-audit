@@ -3,7 +3,9 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
+from matplotlib.colors import to_hex
 
+from robustness_benchmark.evaluation.figure_style import INK, method_style
 from robustness_benchmark.evaluation.rank_tests import (
     InsufficientData,
     nemenyi_critical_difference,
@@ -108,9 +110,17 @@ def test_too_little_data_raises(scores):
 
 
 def test_diagram_labels_every_method_with_its_rank():
-    figure = plot_critical_difference(
-        run(SCORES), title="Example", labels={"A": "Method A"}
-    )
+    scores = {
+        block: {"rbr" if name == "A" else name: value for name, value in row.items()}
+        for block, row in SCORES.items()
+    }
+    figure = plot_critical_difference(run(scores), title="Example")
 
     texts = {text.get_text() for text in figure.axes[0].texts}
-    assert {"Method A (1.00)", "B (2.25)", "C (2.75)"} <= texts
+    assert {"RBR (1.00)", "B (2.25)", "C (2.75)"} <= texts
+    # markers wear the method's colour; unknown methods fall back to ink
+    colours = {
+        to_hex(collection.get_facecolor()[0])
+        for collection in figure.axes[0].collections
+    }
+    assert colours == {method_style("rbr").color, INK}

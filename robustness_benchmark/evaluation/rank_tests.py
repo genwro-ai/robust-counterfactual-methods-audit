@@ -7,7 +7,6 @@ average ranks are further apart than the Nemenyi critical difference.
 """
 
 import math
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 import matplotlib.pyplot as plt
@@ -15,6 +14,18 @@ import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
 from scipy import stats
+
+from robustness_benchmark.evaluation.figure_style import (
+    INK,
+    LABEL_SIZE,
+    MUTED,
+    SECONDARY,
+    TICK_SIZE,
+    TITLE_SIZE,
+    method_style,
+    scatter_method,
+    styled,
+)
 
 
 class InsufficientData(ValueError):
@@ -114,22 +125,15 @@ def rank_test(
     )
 
 
-def plot_critical_difference(
-    result: RankTestResult,
-    *,
-    title: str,
-    labels: Mapping[str, str] | None = None,
-    colors: Mapping[str, str] | None = None,
-    ink: str = "black",
-    muted: str = "0.4",
-) -> Figure:
+@styled
+def plot_critical_difference(result: RankTestResult, *, title: str) -> Figure:
     """Demšar's critical-difference diagram: rank 1 at the right, bars join cliques.
 
     The better half of the methods is labelled on the right, the rest on the
-    left; each label hangs from its average rank on the axis.
+    left; each label hangs from its average rank on the axis and carries the
+    method's marker.
     """
 
-    labels, colors = labels or {}, colors or {}
     ranks = result.average_ranks
     k = len(ranks)
     cliques = result.cliques()
@@ -138,22 +142,26 @@ def plot_critical_difference(
     rows = math.ceil(k / 2)
     bottom = first_row - row_height * rows
 
-    figure, axis = plt.subplots(
-        figsize=(7.2, unit_inches * (1.8 - bottom)), facecolor="white"
-    )
+    figure, axis = plt.subplots(figsize=(7.2, unit_inches * (1.8 - bottom)))
     figure.subplots_adjust(left=0.28, right=0.72, bottom=0.01, top=0.88)
     axis.set(xlim=(k + 0.3, 0.7), ylim=(bottom, 1.4))
     axis.axis("off")
-    axis.set_title(title, loc="left", fontsize=9.2, fontweight="bold", color=ink)
+    figure.suptitle(title, x=0.01, ha="left", fontsize=TITLE_SIZE, fontweight="bold")
 
     def line(x, y, **kwargs):
-        axis.plot(x, y, color=kwargs.pop("color", ink), clip_on=False, **kwargs)
+        axis.plot(x, y, color=kwargs.pop("color", INK), clip_on=False, **kwargs)
 
-    line([1, k], [0, 0], linewidth=1.0)
+    line([1, k], [0, 0], linewidth=0.8, color=SECONDARY)
     for tick in range(1, k + 1):
-        line([tick, tick], [0, 0.12], linewidth=0.8)
+        line([tick, tick], [0, 0.12], linewidth=0.8, color=SECONDARY)
         axis.text(
-            tick, 0.2, str(tick), ha="center", va="bottom", fontsize=6.8, color=muted
+            tick,
+            0.2,
+            str(tick),
+            ha="center",
+            va="bottom",
+            fontsize=TICK_SIZE,
+            color=SECONDARY,
         )
     line([k, k - result.critical_difference], [1.0, 1.0], linewidth=1.6)
     axis.text(
@@ -162,8 +170,7 @@ def plot_critical_difference(
         f"CD = {result.critical_difference:.2f}",
         ha="center",
         va="bottom",
-        fontsize=6.8,
-        color=ink,
+        fontsize=TICK_SIZE,
     )
 
     for level, (start, end) in enumerate(cliques):
@@ -175,17 +182,16 @@ def plot_critical_difference(
         row = position if best_half else k - 1 - position
         y = first_row - row_height * row
         edge = 0.55 if best_half else k + 0.45
-        line([rank, rank, edge], [0, y, y], linewidth=0.6, color=muted)
-        axis.scatter(
-            rank, 0, s=22, color=colors.get(name, ink), zorder=4, clip_on=False
-        )
-        axis.text(
-            edge + (-0.08 if best_half else 0.08),
-            y,
-            f"{labels.get(name, name)} ({rank:.2f})",
+        line([rank, rank, edge], [0, y, y], linewidth=0.6, color=MUTED)
+        scatter_method(axis, name, edge, y, zorder=4, clip_on=False)
+        axis.annotate(
+            f"{method_style(name).label} ({rank:.2f})",
+            (edge, y),
+            xytext=(6 if best_half else -6, 0),
+            textcoords="offset points",
+            annotation_clip=False,
             ha="left" if best_half else "right",
             va="center",
-            fontsize=7,
-            color=ink,
+            fontsize=LABEL_SIZE,
         )
     return figure
