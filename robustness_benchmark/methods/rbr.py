@@ -5,6 +5,12 @@ towards training points carrying the factual's immutable values, and the
 projected gradient steps leave those columns at zero gradient. The ambiguity
 samples around the boundary point only shape the loss. Projection after the
 search restores one-hot and integer validity.
+
+Deviation on constrained schemas: the boundary line search and the validity
+of each gradient iterate are judged on projected points, and the last valid
+projected iterate is returned. Without a boundary point, or when the samples
+around it all share one class, the loss is undefined and no counterfactual is
+returned.
 """
 
 import numpy as np
@@ -78,6 +84,7 @@ class RBRAdapter:
             random_state=self.seed,
             device="cpu",
             frozen=task.schema.immutable_columns(),
+            schema=task.schema,
         )
         self.last_metadata: dict[str, object] = {}
 
@@ -97,11 +104,16 @@ class RBRAdapter:
             self.epsilon_pe,
             None,
         )
-        values = np.asarray(candidate, dtype=float).reshape(-1)
+        values = np.asarray([] if candidate is None else candidate, dtype=float)
+        values = values.reshape(-1)
         finite = len(values) == len(factual) and bool(np.isfinite(values).all())
         base_valid = finite and self.task.model.predict_single(values) == 1
         self.last_metadata = {
-            "rbr_outcome": "success" if base_valid else "base_invalid",
+            "rbr_outcome": (
+                "no_counterfactual"
+                if candidate is None
+                else ("success" if base_valid else "base_invalid")
+            ),
             "rbr_author_feasible": bool(getattr(self.generator, "feasible", False)),
             "rbr_num_counterfactuals": self.num_counterfactuals,
             "rbr_num_samples": self.num_samples,
