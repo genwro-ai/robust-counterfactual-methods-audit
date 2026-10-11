@@ -6,6 +6,10 @@ from tqdm.auto import tqdm
 
 from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.core.task import ClassificationTask, FrameDataset
+from robustness_benchmark.evaluation.plausibility import (
+    SPARSITY_TOLERANCE,
+    MixedDistance,
+)
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION, APASAdapter
 from robustness_benchmark.methods.configuration import (
     GROWING_SPHERES_TARGETS,
@@ -259,13 +263,7 @@ def generate_counterfactuals(
         if dataset_row_ids is not None
         else list(resolved_factual_ids)
     )
-    training_X = task.training_data.X
-    median = training_X.median(axis=0)
-    mad = (training_X - median).abs().median(axis=0)
-    standard_deviation = training_X.std(axis=0, ddof=0)
-    robust_scale = mad.where(mad > 1e-8, standard_deviation).where(
-        lambda value: value > 1e-8, 1.0
-    )
+    distance = MixedDistance(task.training_data.X, task.schema)
 
     factual_iterator = factuals.iterrows()
     if progress_description is not None:
@@ -284,6 +282,7 @@ def generate_counterfactuals(
         error: str | None = None
         status = "exception"
         method_certified: bool | None = None
+        projection_changed: bool | None = None
         try:
             result = generator.generate_for_instance(factual, neg_value=0, **kwargs)
             if not isinstance(result, pd.DataFrame):
@@ -302,6 +301,14 @@ def generate_counterfactuals(
                 # robust candidate exists; that is a missing CE, not a CE.
                 raise NoCounterfactualFound
             finite = bool(np.isfinite(ce.to_numpy()).all())
+            if finite:
+                # Methods search in a relaxed encoding; only a valid one is a CE.
+                projected = task.schema.project(ce.to_numpy(), factual.to_numpy())
+                projection_changed = bool(
+                    np.abs(projected - ce.to_numpy()).max(initial=0.0)
+                    > SPARSITY_TOLERANCE
+                )
+                ce = pd.Series(projected, index=ce.index, name=ce.name)
             base_valid = finite and task.model.predict_single(ce) == 1
             status = (
                 "success"
@@ -331,14 +338,13 @@ def generate_counterfactuals(
                 "generation_status": status,
                 "base_valid": bool(base_valid),
                 "method_certified": method_certified,
+                "projection_changed": projection_changed,
                 "generation_error": error,
                 **method_metadata,
                 "l1_scaled_sum": float(np.nansum(difference)) if base_valid else None,
                 "l1_scaled_mean": float(np.nanmean(difference)) if base_valid else None,
                 "l1_robust_scale_mean": (
-                    float(np.nanmean(difference / robust_scale.to_numpy()))
-                    if base_valid
-                    else None
+                    float(distance(ce, factual)) if base_valid else None
                 ),
             }
         )
