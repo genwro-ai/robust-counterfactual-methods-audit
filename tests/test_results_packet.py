@@ -2,21 +2,35 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from robustness_benchmark.cli.results_packet import (
     DATASETS,
     FAMILY_ORDER,
     MARGIN_METHODS,
     METHOD_ORDER,
+    cross_class_markdown,
+    cross_class_summary,
     discover_runs,
     family_matrix,
+    format_column,
     method_availability,
     plot_paper_family_heatmaps,
+    plot_paper_plausibility,
     plot_paper_tradeoff,
+    plot_rank_diagrams,
+    rank_test_table,
+    run_rank_tests,
     seed_summary,
+    write_brief,
 )
 
 XGBOOST_NOT_RUN = {"wachter", "apas", "rnce", "trex", "roar"}
+MODEL_METHODS = {
+    "mlp": [method for method in METHOD_ORDER if method != "roar"],
+    "logistic": list(METHOD_ORDER),
+    "xgboost": [method for method in METHOD_ORDER if method not in XGBOOST_NOT_RUN],
+}
 
 
 def family_rows(model_type: str, value: float = 0.75) -> list[dict[str, object]]:
@@ -139,3 +153,191 @@ def test_discover_runs_keeps_the_legacy_mlp_directory(tmp_path):
         ("heloc", "mlp", tmp_path / "full_heloc"),
         ("heloc", "xgboost", xgboost_root),
     ]
+
+
+def synthetic_results(plausibility: bool = True) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Overall and per-family frames where later methods in METHOD_ORDER do better."""
+
+    rng = np.random.default_rng(0)
+    overall, family = [], []
+    for model_type, methods in MODEL_METHODS.items():
+        for dataset, label in DATASETS.items():
+            for method in methods:
+                skill = 0.02 * METHOD_ORDER.index(method)
+                overall.append(
+                    {
+                        "dataset": dataset,
+                        "dataset_label": label,
+                        "model_type": model_type,
+                        "method": method,
+                        "generation_coverage": 1.0,
+                        "validity_given_generated": 0.9,
+                        "generated_n": 100,
+                        "certified_n": 90,
+                        "certified_coverage": 0.9,
+                        "changed_validity_given_base_valid": 0.5 + skill,
+                        "end_to_end_changed_validity": 0.4 + skill,
+                        "mean_l1_robust_scale": 1.0 - skill + rng.normal(0, 0.01),
+                        "mean_knn_distance_relative": (
+                            1.0 + rng.uniform() if plausibility else None
+                        ),
+                    }
+                )
+                family.extend(
+                    {
+                        "dataset": dataset,
+                        "model_type": model_type,
+                        "method": method,
+                        "change_family": change_family,
+                        "changed_validity_given_base_valid": 0.5
+                        + skill
+                        + rng.normal(0, 0.05),
+                        "end_to_end_changed_validity": 0.4
+                        + skill
+                        + rng.normal(0, 0.05),
+                    }
+                    for change_family in FAMILY_ORDER
+                )
+    return pd.DataFrame(overall), pd.DataFrame(family)
+
+
+def test_cross_class_summary_marks_methods_a_model_class_did_not_run():
+    overall, _ = synthetic_results()
+
+    summary = cross_class_summary(overall)
+    markdown = cross_class_markdown(summary)
+
+    assert summary.loc["kdtree", "xgboost_empirical_robustness"] == pytest.approx(
+        0.5 + 0.02 * METHOD_ORDER.index("kdtree")
+    )
+    assert summary.loc[sorted(XGBOOST_NOT_RUN), "xgboost_distance"].isna().all()
+    assert list(summary.columns[:3]) == [
+        "mlp_empirical_robustness",
+        "mlp_end_to_end_robustness",
+        "mlp_distance",
+    ]
+    wachter = next(
+        line for line in markdown.splitlines() if line.startswith("| Wachter")
+    )
+    assert wachter.split("|")[-2].strip() == "n/a"
+    assert "% / " in wachter
+
+
+def test_format_column_shows_n_a_for_unrecorded_values():
+    formatted = format_column(pd.Series([None, None], dtype=object), "{:.2f}")
+
+    assert formatted.tolist() == ["n/a", "n/a"]
+    assert format_column(pd.Series([0.5, np.nan]), "{:.1%}").tolist() == [
+        "50.0%",
+        "n/a",
+    ]
+
+
+def test_rank_tests_cover_each_model_type_and_the_shared_methods():
+    overall, family = synthetic_results()
+
+    results = run_rank_tests(overall, family)
+    table = rank_test_table(results)
+
+    assert set(table["scope"]) == {"mlp", "logistic", "xgboost", "cross_class"}
+    assert set(table["analysis"]) == {
+        "empirical_robustness",
+        "end_to_end_robustness",
+        "distance",
+    }
+    cross = results["empirical_robustness", "cross_class"]
+    shared = set(MODEL_METHODS["xgboost"]) - set(MARGIN_METHODS[1:])
+    assert set(cross.average_ranks.index) == shared
+    # dataset x family x model type blocks, all complete
+    assert cross.n_blocks == len(DATASETS) * len(FAMILY_ORDER) * 3
+    distance = results["distance", "mlp"]
+    assert distance.n_blocks == len(DATASETS)
+    assert not any(column.startswith("rank_gs_margin") for column in table.columns)
+    # skill grows along METHOD_ORDER, so distance (lower is better) favours the last
+    assert distance.average_ranks.index[0] == "growing_spheres"
+    assert (
+        results["empirical_robustness", "mlp"].average_ranks.index[0]
+        == "growing_spheres"
+    )
+    assert table.loc[table["scope"].eq("xgboost"), "rank_wachter"].isna().all()
+
+
+def test_rank_tests_skip_analyses_without_complete_blocks():
+    overall, family = synthetic_results()
+    family = family[family["dataset"].eq("heloc")]
+
+    results = run_rank_tests(overall, family)
+
+    assert ("distance", "mlp") in results
+    assert ("empirical_robustness", "mlp") in results
+    assert run_rank_tests(overall, family.iloc[0:0]).keys() == {
+        key for key in results if key[0] == "distance"
+    }
+
+
+def test_rank_diagrams_are_written_per_analysis(tmp_path):
+    overall, family = synthetic_results()
+    results = run_rank_tests(overall, family)
+
+    plot_rank_diagrams(tmp_path, results)
+
+    for analysis, scope in results:
+        for suffix in ("pdf", "png"):
+            assert (
+                tmp_path / f"critical_difference_{analysis}_{scope}.{suffix}"
+            ).is_file()
+    assert (tmp_path / "critical_difference_distance_cross_class.pdf").is_file()
+
+
+def test_plausibility_figure_is_written_when_the_metric_was_recorded(tmp_path):
+    overall, _ = synthetic_results()
+
+    for model_type in tuple(MODEL_METHODS):
+        plot_paper_plausibility(tmp_path, overall, model_type)
+
+    for model_type in tuple(MODEL_METHODS):
+        assert (tmp_path / f"paper_robustness_plausibility_{model_type}.pdf").is_file()
+
+
+def test_plausibility_figure_is_skipped_for_runs_without_the_metric(tmp_path):
+    overall, _ = synthetic_results(plausibility=False)
+
+    plot_paper_plausibility(tmp_path, overall, "mlp")
+    plot_paper_plausibility(
+        tmp_path, overall.drop(columns="mean_knn_distance_relative"), "mlp"
+    )
+
+    assert not list(tmp_path.glob("paper_robustness_plausibility_*"))
+
+
+def test_brief_mentions_cross_class_summary_and_rank_tests(tmp_path):
+    overall, family = synthetic_results()
+    results = run_rank_tests(overall, family)
+
+    write_brief(
+        tmp_path,
+        overall,
+        family,
+        cross_class_summary(overall),
+        rank_test_table(results),
+    )
+
+    brief = (tmp_path / "results_brief.md").read_text()
+    assert "## Rank tests" in brief
+    assert "rank_tests.csv" in brief
+    assert "critical_difference_empirical_robustness_cross_class.png" in brief
+    assert "## Cross-class summary" in brief
+
+
+def test_brief_without_rank_tests_says_so(tmp_path):
+    overall, family = synthetic_results()
+
+    write_brief(
+        tmp_path,
+        overall,
+        family,
+        cross_class_summary(overall),
+        rank_test_table({}),
+    )
+
+    assert "No analysis had enough" in (tmp_path / "results_brief.md").read_text()
