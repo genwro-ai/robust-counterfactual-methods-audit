@@ -21,7 +21,8 @@ as n/a rather than adapted.
 | Method gaps | Ragged matrix. Wachter needs gradients; RNCE, AP∆S (and MCE) need a torch network. None of them runs on XGBoost. |
 | Base configuration | A rule fixed in advance: the grid setting with the lowest mean validation log-loss over three dev seeds, chosen once per dataset and frozen across the five seeds. LR and XGBoost use it. The MLP keeps the prespecified 32-32; its run over five widths is an audit (every width was within 0.006 log-loss of the best on all four datasets). |
 | Change magnitude | Global test-set hard disagreement and probability MAE (unchanged). |
-| New family | `incremental_update`: continue training the deployed base model on a subset of the update pool, for all three classes. |
+| New family | `incremental_update`: update the deployed model with new data instead of retraining it (MLP and XGBoost). |
+| Distinct variants | Configuration candidates are taken in a fixed order from lists longer than 25. A candidate whose mean validation probability differs from the base by less than 0.001 reproduces the base and is skipped. |
 
 ### Change families (25 variants each)
 
@@ -29,22 +30,24 @@ as n/a rather than adapted.
 |---|---|---|---|
 | seed | new init seed | - (fit is deterministic) | new `random_state`; base uses `subsample = colsample_bytree = 0.8` |
 | bootstrap, deletion, data_addition, label_update | shared construction (unchanged) | shared | shared |
-| training_config | 19 Adam + 6 SGD lr/wd (unchanged) | C multipliers x penalty (l2, l1, elasticnet 0.5) x class weight | learning-rate multiplier x `reg_lambda` x `min_child_weight`, plus `gamma`, `reg_alpha`, `subsample` |
-| architecture | widths/depths (unchanged) | - (no analogue) | 25 nearest (`max_depth`, `n_estimators`) pairs in a 6 x 5 grid |
+| training_config | 19 Adam + 6 SGD lr/wd, then reserves | absolute C (1e-3 to 100) x penalty (l2, l1, elasticnet 0.5) x class weight, round-robin across groups | learning-rate multiplier x `reg_lambda` x `min_child_weight`, plus `gamma`, `reg_alpha`, `subsample`, then reserves |
+| architecture | widths/depths | - (no analogue) | nearest (`max_depth`, `n_estimators`) pairs in a 6 x 5 grid |
 | bounded_parameter | l_inf on weights | l_inf on coefficients and intercept | l_inf on leaf values (our construction) |
-| incremental_update | Adam fine-tuning from the base checkpoint | same, through the torch view | add trees fitted on the pool sample |
+| incremental_update | warm start from the deployed weights, same training procedure | - (convex: equals retraining) | continued boosting, early-stopped |
 
-MLP and XGBoost have 225 variants per base model, LR 175.
+MLP and XGBoost have 225 variants per base model, LR 150.
 
-Incremental updates continue training the base model on bootstrap samples of
-the update pool at four intensities (7/6/6/6 replicates). Seeds are disjoint
-from the AP∆S calibration replicas.
-- MLP and LR: 1, 5, 20 or 50 epochs of Adam (batch 8, lr 1e-3). The 1-epoch
-  level is the AP∆S calibration process, held out.
-- XGBoost: adds 10, 25, 50 or 100% of `n_estimators` trees.
+The incremental update is the twin of data addition. Both use the same
+training set plus pool subsets (25/50/75/100%, 8/8/8/1 replicates); data
+addition retrains from scratch, while the incremental update starts from the
+deployed model:
+- MLP: the same full-batch Adam training with early stopping, from the
+  deployed weights.
+- XGBoost: boosting continues after the deployed trees and stops early on
+  validation log-loss, adding at most `n_estimators` trees.
 
-A light single pass changed too little to form a family of its own, which is
-why the levels are graded.
+An earlier design fine-tuned on pool samples alone for up to 50 epochs. It was
+dropped as unrealistic: it mostly measured forgetting the training data.
 
 Bounded-parameter radii are r × the base model's mean |parameter|, with r in
 {0.05, 0.1, 0.2, 0.3, 0.5}, so the l_inf box means the same relative change for

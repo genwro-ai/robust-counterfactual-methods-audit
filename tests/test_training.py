@@ -1,3 +1,4 @@
+import zlib
 from collections import Counter
 
 import pandas as pd
@@ -91,7 +92,8 @@ def test_apas_calibration_updates_copy_checkpoint_and_vary_only_update_sample():
 
 def test_full_bank_has_25_unique_candidates_per_family(monkeypatch):
     def untrained_model(spec, X_train, _y_train, _X_val, _y_val, *, seed):
-        return spec.build(X_train.shape[1], seed)
+        # Distinct configurations get distinct weights, so none reproduces the base.
+        return spec.build(X_train.shape[1], seed + zlib.crc32(repr(spec).encode()))
 
     monkeypatch.setattr("robustness_benchmark.core.training.fit_spec", untrained_model)
     base = TorchBinaryModel(input_dim=2, hidden_dim=(32, 32), seed=2026)

@@ -80,13 +80,17 @@ nine change families (225 per base model, 1,125 per dataset):
 | Data deletion | 1%, 5%, 10% of training rows removed (9/8/8 replicates) |
 | Data addition | 25%, 50%, 75%, 100% of the update pool added (8/8/8/1) |
 | Label update | 1%, 5%, 10% of training labels flipped (9/8/8) |
-| Training configuration | 19 Adam and 6 SGD learning-rate/weight-decay settings |
-| Architecture | 25 alternative widths and depths |
+| Training configuration | Adam and SGD learning-rate/weight-decay settings (19 Adam and 6 SGD, with reserves) |
+| Architecture | alternative widths and depths |
 | Parameter perturbation | $\ell_\infty$ radii {0.05, 0.1, 0.2, 0.3, 0.5} × the base model's mean absolute parameter, five random directions each |
-| Incremental update | Adam fine-tuning (batch 8, lr $10^{-3}$) from the base checkpoint on a bootstrap sample of the update pool for 1, 5, 20, or 50 epochs (7/6/6/6) |
+| Incremental update | the deployed model, warm-started and trained by the same procedure on the training set plus the data-addition pool subsets (8/8/8/1); each variant is paired with the data-addition variant trained from scratch on the same data |
 
-All families except *new initialization* reuse the base model's
-initialization seed. Every variant is evaluated; the 3-point
+Training configurations and architectures are taken in a fixed order from a
+candidate list longer than 25. A candidate whose validation probabilities
+differ from the base model's by less than 0.001 on average reproduces the base
+model and is skipped (recorded as `skipped_candidates`); the first 25 others
+form the family. All families except *new initialization* reuse the base
+model's initialization seed. Every variant is evaluated; the 3-point
 balanced-accuracy flag stored in the catalog is descriptive only. Each variant
 is described by its hard-prediction disagreement and mean absolute probability
 difference from the base model on the test set.
@@ -106,10 +110,10 @@ class:
 | Family | Logistic regression | XGBoost |
 |---|---|---|
 | New initialization | not applicable (deterministic fit) | 25 seeds; row and column subsampling 0.8 |
-| Training configuration | C multipliers with L2, L1, elastic-net and class-balanced fits | learning rate, `reg_lambda`, `min_child_weight`, `gamma`, `reg_alpha`, `subsample` |
-| Architecture | not applicable | 25 nearest (`max_depth`, `n_estimators`) alternatives |
+| Training configuration | C from $10^{-3}$ to 100 with L2, L1, and elastic-net penalties, with and without class balancing | learning rate, `reg_lambda`, `min_child_weight`, `gamma`, `reg_alpha`, `subsample` |
+| Architecture | not applicable | nearest (`max_depth`, `n_estimators`) alternatives |
 | Parameter perturbation | coefficients and intercept | leaf values |
-| Incremental update | Adam fine-tuning through the linear torch view, as for the MLP | 10%, 25%, 50%, or 100% more trees fitted on the pool sample |
+| Incremental update | not applicable (a warm start reaches the same optimum as retraining) | continued boosting on the training set plus pool subset, early-stopped on validation log-loss (at most `n_estimators` new trees) |
 
 Bootstrap, deletion, data addition, and label update are constructed exactly as
 for the MLP. `full_benchmark` skips methods the bank's model class cannot serve

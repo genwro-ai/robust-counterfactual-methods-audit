@@ -2,6 +2,7 @@
 
 import copy
 import dataclasses
+import itertools
 import math
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar, Self
@@ -37,6 +38,14 @@ SGD_TRAINING_CONFIGS = (
     ("sgd", 3e-2, 1e-3),
 )
 TRAINING_CONFIGS = ADAM_TRAINING_CONFIGS + SGD_TRAINING_CONFIGS
+# Reserve candidates, used only when grid settings reproduce the base model.
+RESERVE_TRAINING_CONFIGS = (
+    ("adam", 1.25e-4, 0.0),
+    ("adam", 8e-3, 0.0),
+    ("adam", 8e-3, 1e-3),
+    ("sgd", 1e-1, 0.0),
+    ("sgd", 1e-1, 1e-4),
+)
 
 MLP_ARCHITECTURE_POOL: tuple[tuple[int, ...], ...] = (
     (8,),
@@ -72,15 +81,17 @@ MLP_ARCHITECTURE_POOL: tuple[tuple[int, ...], ...] = (
     (32, 32, 32, 32),
 )
 
-# (C multiplier, l1_ratio, class_weight) relative to the selected base C.
-LOGISTIC_TRAINING_CONFIGS: tuple[tuple[float, float, str | None], ...] = (
-    *(
-        (multiplier, 0.0, None)
-        for multiplier in (0.003, 0.01, 0.03, 0.1, 0.3, 3, 10, 30, 100, 300)
-    ),
-    *((multiplier, 1.0, None) for multiplier in (0.3, 1, 3, 10, 30)),
-    *((multiplier, 0.5, None) for multiplier in (0.3, 1, 3, 10, 30)),
-    *((multiplier, 0.0, "balanced") for multiplier in (0.1, 0.3, 1, 3, 10)),
+# (name, l1_ratio, class_weight, C values). Candidates are taken round-robin
+# across groups, so any prefix mixes penalties and class weighting.
+LOGISTIC_CANDIDATE_GROUPS: tuple[
+    tuple[str, float, str | None, tuple[float, ...]], ...
+] = (
+    ("l2", 0.0, None, (1e-3, 3e-3, 0.01, 0.03, 0.1, 0.3, 1, 3, 10, 30, 100)),
+    ("l1", 1.0, None, (0.01, 0.03, 0.1, 0.3, 1, 10)),
+    ("elasticnet", 0.5, None, (0.01, 0.03, 0.1, 0.3, 1, 10)),
+    ("l2_balanced", 0.0, "balanced", (1e-3, 0.01, 0.1, 1, 10, 100)),
+    ("l1_balanced", 1.0, "balanced", (0.01, 0.1, 1, 10)),
+    ("elasticnet_balanced", 0.5, "balanced", (0.01, 0.1, 1, 10)),
 )
 LOGISTIC_SELECTION_C = (0.001, 0.01, 0.1, 1.0, 10.0, 100.0)
 MLP_SELECTION_ARCHITECTURES = ((16, 16), (32, 16), (32, 32), (64, 32), (64, 64))
@@ -174,9 +185,6 @@ class ModelSpec(ABC):
 
     model_type: ClassVar[str]
     change_families: ClassVar[tuple[str, ...]]
-    # Incremental-update intensities, from a light refresh to a heavy one.
-    incremental_unit: ClassVar[str]
-    incremental_intensities: ClassVar[tuple[float, ...]]
 
     @abstractmethod
     def build(self, input_dim: int, seed: int) -> Classifier:
@@ -219,12 +227,16 @@ class ModelSpec(ABC):
         return {"model_type": self.model_type, **self.hyperparameters()}
 
     def training_config_variants(self) -> list[tuple[str, dict[str, Any]]]:
-        """Return 25 (level, overrides) alternatives to the base training setup."""
+        """Ordered (level, overrides) candidates for the training-config family.
+
+        The bank keeps the first 25 that change the base model, so lists hold
+        more than 25 and exclude the base configuration itself.
+        """
 
         return []
 
     def architecture_variants(self) -> list[tuple[str, dict[str, Any]]]:
-        """Return 25 (level, overrides) alternatives to the base capacity."""
+        """Ordered (level, overrides) candidates for the architecture family."""
 
         return []
 
@@ -238,11 +250,17 @@ class ModelSpec(ABC):
     ) -> Classifier:
         """Return a copy with parameters moved by exactly ``radius`` in l_inf."""
 
-    @abstractmethod
     def incremental_update(
-        self, model: Classifier, X: pd.DataFrame, y: pd.Series, *, intensity: float
+        self,
+        model: Classifier,
+        X: pd.DataFrame,
+        y: pd.Series,
+        X_val: pd.DataFrame,
+        y_val: pd.Series,
     ) -> Classifier:
-        """Return a copy of ``model`` that continued training on ``(X, y)``."""
+        """Return a copy of ``model`` updated, not retrained, on ``(X, y)``."""
+
+        raise NotImplementedError(f"{self.model_type} has no incremental update")
 
     @classmethod
     def selection_grid(cls, base: Self) -> list[Self]:
@@ -252,14 +270,7 @@ class ModelSpec(ABC):
 
 
 class _TorchSpec(ModelSpec):
-    """Perturbation and incremental updates through the torch network.
-
-    Incremental updates are Adam fine-tuning passes (batch 8, learning rate
-    1e-3, as in the APAS calibration) from the base checkpoint.
-    """
-
-    incremental_unit = "epochs"
-    incremental_intensities = (1, 5, 20, 50)
+    """Parameter scale and perturbation through the torch network."""
 
     @staticmethod
     def _network(model: Classifier) -> TorchBinaryModel:
@@ -277,13 +288,6 @@ class _TorchSpec(ModelSpec):
         self, model: Classifier, *, radius: float, seed: int
     ) -> Classifier:
         return perturb_torch_parameters(self._network(model), radius=radius, seed=seed)
-
-    def incremental_update(
-        self, model: Classifier, X: pd.DataFrame, y: pd.Series, *, intensity: float
-    ) -> Classifier:
-        return torch_incremental_update(
-            self._network(model), X, y, epochs=int(intensity)
-        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -336,19 +340,33 @@ class MLPSpec(_TorchSpec):
                     "weight_decay": weight_decay,
                 },
             )
-            for optimizer_name, learning_rate, weight_decay in TRAINING_CONFIGS
+            for optimizer_name, learning_rate, weight_decay in (
+                TRAINING_CONFIGS + RESERVE_TRAINING_CONFIGS
+            )
+            if (optimizer_name, learning_rate, weight_decay)
+            != (self.optimizer_name, self.learning_rate, self.weight_decay)
         ]
 
     def architecture_variants(self) -> list[tuple[str, dict[str, Any]]]:
-        alternatives = [
-            candidate
-            for candidate in MLP_ARCHITECTURE_POOL
-            if candidate != self.hidden_dim
-        ][:FULL_VARIANTS_PER_FAMILY]
         return [
             ("_".join(map(str, architecture)), {"hidden_dim": architecture})
-            for architecture in alternatives
+            for architecture in MLP_ARCHITECTURE_POOL
+            if architecture != self.hidden_dim
         ]
+
+    def incremental_update(
+        self,
+        model: Classifier,
+        X: pd.DataFrame,
+        y: pd.Series,
+        X_val: pd.DataFrame,
+        y_val: pd.Series,
+    ) -> Classifier:
+        """Rerun the training procedure on ``(X, y)`` from the deployed weights."""
+
+        updated = copy.deepcopy(self._network(model))
+        updated.train(X, y, X_val=X_val, y_val=y_val, **self.training_kwargs())
+        return updated
 
     @classmethod
     def selection_grid(cls, base: "MLPSpec") -> list["MLPSpec"]:
@@ -357,10 +375,11 @@ class MLPSpec(_TorchSpec):
 
 @dataclasses.dataclass(frozen=True)
 class LogisticSpec(_TorchSpec):
-    """Logistic regression; seed and architecture families do not apply.
+    """Logistic regression.
 
-    Incremental updates run through the torch view: a converged warm-started
-    refit would reach the pool-only optimum and forget the base model.
+    Seed, architecture and incremental-update families do not apply: the fit
+    is a convex problem with one optimum, so a new seed or a warm start from
+    the deployed coefficients reproduces retraining from scratch.
     """
 
     model_type = "logistic"
@@ -371,7 +390,6 @@ class LogisticSpec(_TorchSpec):
         "label_update",
         "training_config",
         "bounded_parameter",
-        "incremental_update",
     )
 
     C: float = 1.0
@@ -393,23 +411,23 @@ class LogisticSpec(_TorchSpec):
         return f"logistic_C_{self.C:g}"
 
     def training_config_variants(self) -> list[tuple[str, dict[str, Any]]]:
-        penalties = {0.0: "l2", 1.0: "l1", 0.5: "elasticnet"}
-        variants = []
-        for multiplier, l1_ratio, class_weight in LOGISTIC_TRAINING_CONFIGS:
-            level = f"{penalties[l1_ratio]}_C_x{multiplier:g}"
-            if class_weight is not None:
-                level += f"_{class_weight}"
-            variants.append(
+        groups = [
+            [
                 (
-                    level,
-                    {
-                        "C": self.C * multiplier,
-                        "l1_ratio": l1_ratio,
-                        "class_weight": class_weight,
-                    },
+                    f"{name}_C_{C:g}",
+                    {"C": float(C), "l1_ratio": l1_ratio, "class_weight": class_weight},
                 )
+                for C in values
+            ]
+            for name, l1_ratio, class_weight, values in LOGISTIC_CANDIDATE_GROUPS
+        ]
+        return [
+            candidate
+            for candidate in itertools.chain.from_iterable(
+                itertools.zip_longest(*groups)
             )
-        return variants
+            if candidate is not None and self.with_overrides(**candidate[1]) != self
+        ]
 
     @classmethod
     def selection_grid(cls, base: "LogisticSpec") -> list["LogisticSpec"]:
@@ -418,12 +436,10 @@ class LogisticSpec(_TorchSpec):
 
 @dataclasses.dataclass(frozen=True)
 class XGBoostSpec(ModelSpec):
-    """Gradient-boosted trees; incremental updates add trees fitted on new data."""
+    """Gradient-boosted trees; incremental updates continue boosting."""
 
     model_type = "xgboost"
     change_families = MLPSpec.change_families
-    incremental_unit = "added_tree_fraction"
-    incremental_intensities = (0.1, 0.25, 0.5, 1.0)
 
     n_estimators: int = 100
     max_depth: int = 3
@@ -477,6 +493,18 @@ class XGBoostSpec(ModelSpec):
             (f"subsample_{subsample:g}", {"subsample": subsample})
             for subsample in (0.6, 1.0)
         )
+        # Reserve candidates, used only when the ones above reproduce the base.
+        variants.extend(
+            [
+                ("eta_x0.25", {"learning_rate": self.learning_rate * 0.25}),
+                ("eta_x4", {"learning_rate": self.learning_rate * 4}),
+                ("lambda_100", {"reg_lambda": 100.0}),
+                ("mcw_10", {"min_child_weight": 10.0}),
+                ("gamma_5", {"gamma": 5.0}),
+                ("alpha_10", {"reg_alpha": 10.0}),
+                ("subsample_0.5", {"subsample": 0.5}),
+            ]
+        )
         return variants
 
     def architecture_variants(self) -> list[tuple[str, dict[str, Any]]]:
@@ -497,7 +525,7 @@ class XGBoostSpec(ModelSpec):
                 f"depth_{depth}_trees_{estimators}",
                 {"max_depth": depth, "n_estimators": estimators},
             )
-            for depth, estimators in nearest[:FULL_VARIANTS_PER_FAMILY]
+            for depth, estimators in nearest
         ]
 
     @staticmethod
@@ -521,10 +549,21 @@ class XGBoostSpec(ModelSpec):
         return booster.with_leaf_offsets(direction.double().numpy())
 
     def incremental_update(
-        self, model: Classifier, X: pd.DataFrame, y: pd.Series, *, intensity: float
+        self,
+        model: Classifier,
+        X: pd.DataFrame,
+        y: pd.Series,
+        X_val: pd.DataFrame,
+        y_val: pd.Series,
     ) -> Classifier:
-        rounds = max(1, round(intensity * self.n_estimators))
-        return self._booster(model).continue_training(X, y, rounds=rounds)
+        """Boost new trees on ``(X, y)`` after the deployed ones, early-stopped.
+
+        At most ``n_estimators`` trees are added.
+        """
+
+        return self._booster(model).continue_training(
+            X, y, max_rounds=self.n_estimators, X_val=X_val, y_val=y_val
+        )
 
     @classmethod
     def selection_grid(cls, base: "XGBoostSpec") -> list["XGBoostSpec"]:

@@ -146,6 +146,9 @@ def fit_model(
 
 
 SELECTION_DEV_SEEDS = (2026, 2027, 2028)
+# A configuration candidate whose validation probabilities differ from the
+# base model's by less than this mean absolute amount reproduces the base.
+DISTINCT_VALIDATION_MAE = 1e-3
 FULL_CHANGE_FAMILIES = MLPSpec.change_families
 SMOKE_CHANGE_FAMILIES = (
     "seed",
@@ -242,7 +245,7 @@ def make_changed_models(
     n = len(data.X_train)
     changed: list[ChangedModel] = []
 
-    def train_variant(
+    def fit_variant(
         change_id: str,
         family: str,
         level: str,
@@ -251,7 +254,7 @@ def make_changed_models(
         *,
         seed: int = base_seed,
         overrides: dict[str, object] | None = None,
-    ) -> None:
+    ) -> ChangedModel:
         variant_spec = spec.with_overrides(**(overrides or {}))
         model = fit_spec(
             variant_spec,
@@ -261,19 +264,78 @@ def make_changed_models(
             data.y_val,
             seed=seed,
         )
-        changed.append(
-            ChangedModel(
-                change_id,
-                family,
-                level,
-                model,
-                {
-                    "model_type": spec.model_type,
-                    "training_seed": seed,
-                    **variant_spec.hyperparameters(),
-                },
-            )
+        return ChangedModel(
+            change_id,
+            family,
+            level,
+            model,
+            {
+                "model_type": spec.model_type,
+                "training_seed": seed,
+                **variant_spec.hyperparameters(),
+            },
         )
+
+    def train_variant(*args, **kwargs) -> None:
+        changed.append(fit_variant(*args, **kwargs))
+
+    def update_pool_subsets():
+        """Yield (level, fraction, replicate, seed, rows) of update-pool subsets.
+
+        A fixed update pool has only one genuinely distinct 100% subset, so
+        there are eight independent subsets at each lower level and the full
+        pool once. Data addition and incremental update share these subsets.
+        """
+
+        design = ((1.0, 1),) if smoke else ((0.25, 8), (0.50, 8), (0.75, 8), (1.0, 1))
+        for fraction, level_replicates in design:
+            for replicate in range(level_replicates):
+                seed = base_seed + 30_000 + round(fraction * 1_000) + replicate
+                rows = np.sort(
+                    np.random.default_rng(seed).choice(
+                        len(data.X_update),
+                        size=max(1, round(fraction * len(data.X_update))),
+                        replace=False,
+                    )
+                )
+                yield f"{fraction:g}_update_pool", fraction, replicate, seed, rows
+
+    def with_update_rows(rows: np.ndarray) -> tuple[pd.DataFrame, pd.Series]:
+        return (
+            pd.concat([data.X_train, data.X_update.iloc[rows]], ignore_index=True),
+            pd.concat([data.y_train, data.y_update.iloc[rows]], ignore_index=True),
+        )
+
+    base_validation = base_model.predict(data.X_val).iloc[:, 0].to_numpy()
+
+    def build_configuration_family(
+        family: str, candidates: list[tuple[str, dict[str, object]]]
+    ) -> None:
+        """Keep, in order, the first candidates that change the base model."""
+
+        target = 1 if smoke else FULL_VARIANTS_PER_FAMILY
+        accepted: list[ChangedModel] = []
+        skipped: list[str] = []
+        for level, overrides in candidates:
+            if len(accepted) == target:
+                break
+            change = fit_variant(
+                f"{family}:{level}:seed{base_seed}", family, level, overrides=overrides
+            )
+            validation = change.model.predict(data.X_val).iloc[:, 0].to_numpy()
+            mae = float(np.mean(np.abs(validation - base_validation)))
+            change.metadata["validation_probability_mae"] = mae
+            if mae < DISTINCT_VALIDATION_MAE:
+                skipped.append(level)
+            else:
+                accepted.append(change)
+        if len(accepted) < target:
+            raise AssertionError(
+                f"Only {len(accepted)} {family} candidates change the base model"
+            )
+        for change in accepted:
+            change.metadata["skipped_candidates"] = skipped
+        changed.extend(accepted)
 
     replicate_count = 1 if smoke else FULL_VARIANTS_PER_FAMILY
 
@@ -334,40 +396,18 @@ def make_changed_models(
                 )
 
     def build_data_addition() -> None:
-        # A fixed update pool has only one genuinely distinct 100% subset. Use
-        # eight independent subsets at each lower level and the full pool once.
-        design = ((1.0, 1),) if smoke else ((0.25, 8), (0.50, 8), (0.75, 8), (1.0, 1))
-        for fraction, replicate in (
-            (fraction, replicate)
-            for fraction, level_replicates in design
-            for replicate in range(level_replicates)
-        ):
-            sampling_seed = base_seed + 30_000 + round(fraction * 1_000) + replicate
-            update_n = max(1, round(fraction * len(data.X_update)))
-            update_rows = np.sort(
-                np.random.default_rng(sampling_seed).choice(
-                    len(data.X_update), size=update_n, replace=False
-                )
-            )
-            X_augmented = pd.concat(
-                [data.X_train, data.X_update.iloc[update_rows]], ignore_index=True
-            )
-            y_augmented = pd.concat(
-                [data.y_train, data.y_update.iloc[update_rows]], ignore_index=True
-            )
-            level = f"{fraction:g}_update_pool"
+        for level, fraction, replicate, seed, rows in update_pool_subsets():
             train_variant(
-                f"data_addition:{level}:r{replicate}:seed{sampling_seed}",
+                f"data_addition:{level}:r{replicate}:seed{seed}",
                 "data_addition",
                 level,
-                X_augmented,
-                y_augmented,
+                *with_update_rows(rows),
             )
             changed[-1].metadata.update(
                 {
-                    "added_n": update_n,
+                    "added_n": len(rows),
                     "update_fraction": fraction,
-                    "sampling_seed": sampling_seed,
+                    "sampling_seed": seed,
                     "replicate": replicate,
                 }
             )
@@ -405,32 +445,10 @@ def make_changed_models(
                 )
 
     def build_training_config() -> None:
-        variants = spec.training_config_variants()
-        if len(variants) != FULL_VARIANTS_PER_FAMILY:
-            raise AssertionError("Training configuration grid must contain 25 models")
-        for level, overrides in variants:
-            train_variant(
-                f"training_config:{level}:seed{base_seed}",
-                "training_config",
-                level,
-                overrides=overrides,
-            )
-            if spec.model_type == "mlp":
-                changed[-1].metadata["grid_version"] = "sgd_2x3_lr_wd_v2"
+        build_configuration_family("training_config", spec.training_config_variants())
 
     def build_architecture() -> None:
-        variants = spec.architecture_variants()
-        if len(variants) != FULL_VARIANTS_PER_FAMILY:
-            raise AssertionError("Architecture pool must contain 25 alternatives")
-        if smoke:
-            variants = variants[:1]
-        for level, overrides in variants:
-            train_variant(
-                f"architecture:{level}:seed{base_seed}",
-                "architecture",
-                level,
-                overrides=overrides,
-            )
+        build_configuration_family("architecture", spec.architecture_variants())
 
     def build_bounded_parameter() -> None:
         scale = spec.parameter_scale(base_model)
@@ -453,49 +471,32 @@ def make_changed_models(
                 changed.append(change)
 
     def build_incremental_update() -> None:
-        # Each update continues training the base model on a bootstrap sample
-        # of the update pool, from a light refresh to a heavy one. Seeds are
-        # disjoint from the APAS calibration replicas.
-        intensities = spec.incremental_intensities[: 1 if smoke else None]
-        replicates = (
-            (1,)
-            if smoke
-            else _replicates_by_level(FULL_VARIANTS_PER_FAMILY, len(intensities))
-        )
-        update_n = len(data.X_update)
-        for level_index, (intensity, level_replicates) in enumerate(
-            zip(intensities, replicates, strict=True)
-        ):
-            level = f"{spec.incremental_unit}_{intensity:g}"
-            for replicate in range(level_replicates):
-                sampling_seed = base_seed + 50_000 + 1_000 * level_index + replicate
-                rows = np.random.default_rng(sampling_seed).integers(
-                    0, update_n, size=update_n
+        # Twin of data addition: the same data, but the deployed model is
+        # updated instead of retrained from scratch.
+        for level, fraction, replicate, seed, rows in update_pool_subsets():
+            model = spec.incremental_update(
+                base_model, *with_update_rows(rows), data.X_val, data.y_val
+            )
+            changed.append(
+                ChangedModel(
+                    f"incremental_update:{level}:r{replicate}:seed{seed}",
+                    "incremental_update",
+                    level,
+                    model,
+                    {
+                        "model_type": spec.model_type,
+                        **spec.hyperparameters(),
+                        "initialized_from_base_checkpoint": True,
+                        "paired_change_id": (
+                            f"data_addition:{level}:r{replicate}:seed{seed}"
+                        ),
+                        "added_n": len(rows),
+                        "update_fraction": fraction,
+                        "sampling_seed": seed,
+                        "replicate": replicate,
+                    },
                 )
-                model = spec.incremental_update(
-                    base_model,
-                    data.X_update.iloc[rows].reset_index(drop=True),
-                    data.y_update.iloc[rows].reset_index(drop=True),
-                    intensity=intensity,
-                )
-                changed.append(
-                    ChangedModel(
-                        f"incremental_update:{level}:r{replicate}:seed{sampling_seed}",
-                        "incremental_update",
-                        level,
-                        model,
-                        {
-                            "model_type": spec.model_type,
-                            **spec.hyperparameters(),
-                            "initialized_from_base_checkpoint": True,
-                            spec.incremental_unit: intensity,
-                            "sampling_scheme": "bootstrap_update_pool",
-                            "update_n": update_n,
-                            "sampling_seed": sampling_seed,
-                            "replicate": replicate,
-                        },
-                    )
-                )
+            )
 
     builders = {
         "seed": build_seed,

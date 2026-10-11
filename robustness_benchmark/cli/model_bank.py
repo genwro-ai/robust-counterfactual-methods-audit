@@ -19,6 +19,7 @@ from robustness_benchmark.core.provenance import (
 from robustness_benchmark.core.training import (
     BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
     BETARCE_GENERATION_ENSEMBLE_SIZE,
+    DISTINCT_VALIDATION_MAE,
     FULL_VARIANTS_PER_FAMILY,
     SELECTION_DEV_SEEDS,
     fit_spec,
@@ -300,10 +301,9 @@ def prepare_model_bank(
         "candidate_models_per_base": (
             FULL_VARIANTS_PER_FAMILY * len(spec.change_families)
         ),
-        "training_config_grid_version": (
-            "sgd_2x3_lr_wd_v2" if spec.model_type == "mlp" else f"{spec.model_type}_v1"
-        ),
-        "training_config_grid": [
+        "configuration_candidates_version": "ordered_distinct_v1",
+        "distinct_validation_mae": DISTINCT_VALIDATION_MAE,
+        "training_config_candidates": [
             {"level": level, **overrides}
             for level, overrides in spec.training_config_variants()
         ],

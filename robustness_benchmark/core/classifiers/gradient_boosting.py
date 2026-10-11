@@ -98,31 +98,56 @@ class XGBoostClassifier(Classifier):
     def train(
         self, X: pd.DataFrame, y: pd.DataFrame | pd.Series, **_kwargs: object
     ) -> None:
-        xgb = _xgboost()
-        self.booster = xgb.train(
+        self.booster = _xgboost().train(
             self.booster_params(),
-            xgb.DMatrix(
-                _as_matrix(X), label=np.asarray(y).astype(np.float32), nthread=1
-            ),
+            self._matrix(X, y),
             num_boost_round=self.hyperparameters["n_estimators"],
         )
 
     def continue_training(
-        self, X: pd.DataFrame, y: pd.Series, *, rounds: int
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        *,
+        max_rounds: int,
+        X_val: pd.DataFrame | None = None,
+        y_val: pd.Series | None = None,
+        early_stopping_rounds: int = 30,
     ) -> "XGBoostClassifier":
-        """Return a copy with ``rounds`` new trees fitted on ``(X, y)``."""
+        """Return a copy with new trees boosted on ``(X, y)`` after the existing ones.
+
+        With validation data, boosting stops once validation log-loss has not
+        improved for ``early_stopping_rounds`` and keeps the best iteration.
+        """
 
         xgb = _xgboost()
-        updated = self.clone()
-        updated.booster = xgb.train(
-            self.booster_params(),
-            xgb.DMatrix(
-                _as_matrix(X), label=np.asarray(y).astype(np.float32), nthread=1
-            ),
-            num_boost_round=rounds,
-            xgb_model=updated._fitted_booster(),
+        validation = (
+            {
+                "evals": [(self._matrix(X_val, y_val), "validation")],
+                "early_stopping_rounds": early_stopping_rounds,
+                "verbose_eval": False,
+            }
+            if X_val is not None and y_val is not None
+            else {}
         )
+        updated = self.clone()
+        booster = xgb.train(
+            self.booster_params(),
+            self._matrix(X, y),
+            num_boost_round=max_rounds,
+            xgb_model=updated._fitted_booster(),
+            **validation,
+        )
+        if validation:
+            booster = booster[: booster.best_iteration + 1]
+        updated.booster = booster
         return updated
+
+    @staticmethod
+    def _matrix(X, y) -> "xgb.DMatrix":
+        return _xgboost().DMatrix(
+            _as_matrix(X), label=np.asarray(y).astype(np.float32), nthread=1
+        )
 
     def _fitted_booster(self) -> "xgb.Booster":
         if self.booster is None:

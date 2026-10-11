@@ -1,9 +1,11 @@
+import copy
 from collections import Counter
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from robustness_benchmark.core import training
 from robustness_benchmark.core.classifiers import (
     LogisticClassifier,
     XGBoostClassifier,
@@ -41,7 +43,7 @@ SMALL_XGBOOST = XGBoostSpec(n_estimators=5, max_depth=2)
 @pytest.mark.parametrize(
     ("spec", "families"),
     [
-        (LogisticSpec(), 7),
+        (LogisticSpec(), 6),
         (SMALL_XGBOOST, 9),
     ],
 )
@@ -83,18 +85,46 @@ def test_mlp_bank_keeps_its_families_and_adds_incremental_update():
     assert MLPSpec.change_families[8] == "incremental_update"
 
 
-def test_training_config_and_architecture_variants_are_distinct():
-    for spec in (MLPSpec(), LogisticSpec(C=2.0), XGBoostSpec()):
-        configs = spec.training_config_variants()
-        assert len(configs) == FULL_VARIANTS_PER_FAMILY
-        assert len({level for level, _ in configs}) == FULL_VARIANTS_PER_FAMILY
-        assert all(spec.with_overrides(**overrides) != spec for _, overrides in configs)
-    for spec in (MLPSpec(), XGBoostSpec(max_depth=6, n_estimators=50)):
-        architectures = spec.architecture_variants()
-        assert len(architectures) == FULL_VARIANTS_PER_FAMILY
-        assert all(
-            spec.with_overrides(**overrides) != spec for _, overrides in architectures
-        )
+def test_candidate_lists_exclude_the_base_and_leave_reserves():
+    bases = [
+        *LogisticSpec.selection_grid(LogisticSpec()),
+        *XGBoostSpec.selection_grid(XGBoostSpec()),
+        MLPSpec(),
+    ]
+    for spec in bases:
+        for candidates in (
+            spec.training_config_variants(),
+            spec.architecture_variants(),
+        ):
+            if not candidates:
+                continue
+            levels = [level for level, _ in candidates]
+            assert len(candidates) > FULL_VARIANTS_PER_FAMILY
+            assert len(set(levels)) == len(levels)
+            assert all(
+                spec.with_overrides(**changes) != spec for _, changes in candidates
+            )
+
+
+def test_configuration_family_skips_candidates_that_reproduce_the_base(monkeypatch):
+    spec = LogisticSpec()
+    base = spec.fit(Split.X_train, Split.y_train, Split.X_val, Split.y_val, seed=1)
+    real_fit = training.fit_spec
+
+    def fit_or_copy_base(candidate, *args, **kwargs):
+        # Every L1 candidate reproduces the base model exactly.
+        if candidate.l1_ratio == 1.0:
+            return copy.deepcopy(base)
+        return real_fit(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(training, "fit_spec", fit_or_copy_base)
+    changes = make_changed_models(Split(), base, base_seed=1, spec=spec)
+
+    configs = [c for c in changes if c.change_family == "training_config"]
+    assert len(configs) == FULL_VARIANTS_PER_FAMILY
+    assert all(c.metadata["l1_ratio"] != 1.0 for c in configs)
+    skipped = configs[0].metadata["skipped_candidates"]
+    assert skipped and all(level.startswith("l1_") for level in skipped)
 
 
 def test_logistic_parameter_perturbation_reaches_radius():
@@ -125,10 +155,12 @@ def test_xgboost_parameter_perturbation_moves_leaves_by_radius():
 
 
 def test_incremental_update_starts_from_the_base_model():
-    spec = LogisticSpec()
+    X = pd.concat([Split.X_train, Split.X_update], ignore_index=True)
+    y = pd.concat([Split.y_train, Split.y_update], ignore_index=True)
+    spec = MLPSpec(hidden_dim=(4,), epochs=5)
     base = spec.fit(Split.X_train, Split.y_train, Split.X_val, Split.y_val, seed=1)
 
-    updated = spec.incremental_update(base, Split.X_update, Split.y_update, intensity=1)
+    updated = spec.incremental_update(base, X, y, Split.X_val, Split.y_val)
 
     distance = parameter_linf_distance(base, updated)
     assert distance is not None and 0 < distance < 0.1
@@ -137,9 +169,12 @@ def test_incremental_update_starts_from_the_base_model():
         Split.X_train, Split.y_train, Split.X_val, Split.y_val, seed=1
     )
     xgb_updated = SMALL_XGBOOST.incremental_update(
-        xgb_base, Split.X_update, Split.y_update, intensity=0.5
+        xgb_base, X, y, Split.X_val, Split.y_val
     )
-    assert xgb_updated.num_trees == xgb_base.num_trees + 2
+    trees = xgb_updated.num_trees - xgb_base.num_trees
+    assert 1 <= trees <= SMALL_XGBOOST.n_estimators
+    with pytest.raises(NotImplementedError):
+        LogisticSpec().incremental_update(base, X, y, Split.X_val, Split.y_val)
 
 
 def test_betarce_ensemble_member_uses_spec():
@@ -160,8 +195,8 @@ def test_select_base_spec_picks_lowest_validation_log_loss():
     assert selected.C == best["model_spec"]["C"]
 
 
-def test_bank_uses_relative_radii_and_graded_incremental_levels():
-    spec = LogisticSpec()
+def test_bank_uses_relative_radii_and_pairs_incremental_with_data_addition():
+    spec = SMALL_XGBOOST
     base = spec.fit(Split.X_train, Split.y_train, Split.X_val, Split.y_val, seed=1)
 
     changes = make_changed_models(Split(), base, base_seed=1, spec=spec)
@@ -171,15 +206,12 @@ def test_bank_uses_relative_radii_and_graded_incremental_levels():
         if change.change_family == "bounded_parameter":
             relative = change.metadata["relative_parameter_radius"]
             assert change.change_level == f"relative_linf_{relative:g}"
-            assert parameter_linf_distance(base, change.model) == pytest.approx(
-                relative * scale, rel=1e-4
-            )
-    levels = Counter(
-        change.change_level
-        for change in changes
-        if change.change_family == "incremental_update"
-    )
-    assert levels == {"epochs_1": 7, "epochs_5": 6, "epochs_20": 6, "epochs_50": 6}
+            shift = np.abs(change.model.leaf_values() - base.leaf_values())
+            assert shift.max() == pytest.approx(relative * scale, rel=1e-3)
+    ids = {change.change_id for change in changes}
+    incremental = [c for c in changes if c.change_family == "incremental_update"]
+    assert len(incremental) == FULL_VARIANTS_PER_FAMILY
+    assert all(c.metadata["paired_change_id"] in ids for c in incremental)
 
 
 def test_spec_serialization_round_trip():

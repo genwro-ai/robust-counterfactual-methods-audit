@@ -97,7 +97,7 @@ def test_xgboost_continued_training_adds_trees_without_touching_base():
     model, X, y = trained(XGBoostClassifier, n_estimators=10, max_depth=2)
     before = model.predict(X).to_numpy()
 
-    updated = model.continue_training(X.iloc[:50], y.iloc[:50], rounds=3)
+    updated = model.continue_training(X.iloc[:50], y.iloc[:50], max_rounds=3)
 
     assert model.num_trees == 10
     assert updated.num_trees == 13
