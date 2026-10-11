@@ -1,4 +1,4 @@
-from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.core.classifiers import MLPClassifier
 
 
 class IntervalAbstractionPytorch:
@@ -41,7 +41,7 @@ class IntervalAbstractionPytorch:
     -------
     """
 
-    def __init__(self, model: TorchBinaryModel, delta: float, bias_delta=None):
+    def __init__(self, model: MLPClassifier, delta: float, bias_delta=None):
         """
         @param model: SimpleNNModel, the Neural network to create an INN of
         @param delta: int, perturbation to weights

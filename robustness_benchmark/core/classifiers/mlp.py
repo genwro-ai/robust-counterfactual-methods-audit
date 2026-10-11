@@ -1,11 +1,22 @@
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import torch
 from torch import nn
 
+from robustness_benchmark.core.classifiers.base import (
+    DIFFERENTIABLE,
+    TORCH_NETWORK,
+    Classifier,
+)
 
-class TorchBinaryModel:
+
+class MLPClassifier(Classifier):
     """Deterministic binary multilayer perceptron."""
+
+    model_type = "mlp"
+    capabilities = frozenset({DIFFERENTIABLE, TORCH_NETWORK})
 
     def __init__(
         self,
@@ -121,26 +132,28 @@ class TorchBinaryModel:
             probabilities = self.predict_proba_tensor(self._tensor(X)).cpu().numpy()
         return pd.DataFrame(probabilities)
 
-    def predict_single(
-        self, X: pd.DataFrame | pd.Series | np.ndarray | torch.Tensor
-    ) -> int:
-        return int(self.predict(X).iloc[0, 0] >= 0.5)
-
-    def predict_proba(
-        self, X: pd.DataFrame | pd.Series | np.ndarray | torch.Tensor
-    ) -> pd.DataFrame:
-        p1 = self.predict(X).iloc[:, 0]
-        return pd.DataFrame({0: 1.0 - p1, 1: p1})
-
     def predict_proba_tensor(self, X: torch.Tensor) -> torch.Tensor:
         return self._model(X)
 
-    def evaluate(self, X: pd.DataFrame, y: pd.DataFrame | pd.Series) -> float:
-        predicted = (self.predict(X).iloc[:, 0].to_numpy() >= 0.5).astype(int)
-        return float(np.mean(predicted == np.asarray(y)))
-
-    def compute_accuracy(self, X: pd.DataFrame, y: pd.DataFrame | pd.Series) -> float:
-        return self.evaluate(X, y)
-
     def get_torch_model(self) -> nn.Sequential:
         return self._model
+
+    def checkpoint_payload(self) -> dict[str, Any]:
+        return {
+            "input_dim": self.input_dim,
+            "hidden_dim": self.hidden_dim,
+            "output_dim": self.output_dim,
+            "seed": self.seed,
+            "state_dict": self._model.state_dict(),
+        }
+
+    @classmethod
+    def from_checkpoint_payload(cls, payload: dict[str, Any]) -> "MLPClassifier":
+        model = cls(
+            input_dim=int(payload["input_dim"]),
+            hidden_dim=tuple(int(width) for width in payload["hidden_dim"]),
+            seed=int(payload["seed"]),
+        )
+        model.get_torch_model().load_state_dict(payload["state_dict"])
+        model.get_torch_model().eval()
+        return model

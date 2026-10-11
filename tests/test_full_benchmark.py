@@ -3,16 +3,18 @@ import json
 import pandas as pd
 import pytest
 
-from robustness_benchmark.cli.full_benchmark import (
+from robustness_benchmark.benchmark.store import (
     BENCHMARK_PROTOCOL_VERSION,
-    configs_from_frozen_tuning,
     read_protocol_runs,
-    run_matches_config,
+    run_is_current,
+)
+from robustness_benchmark.benchmark.tuning import (
+    configs_from_frozen_tuning,
     selection_key,
     tuning_config_is_current,
     tuning_protocol_is_reusable,
 )
-from robustness_benchmark.methods.apas_calibration import (
+from robustness_benchmark.methods.calibration import (
     APAS_CALIBRATION_PROTOCOL_VERSION,
     apas_method_config,
 )
@@ -24,22 +26,22 @@ def test_tuning_selects_by_validity_then_cost_without_changed_models():
         {
             "config": {"lamb": 0.01},
             "base_validity": 0.8,
-            "mean_l1_robust_scale": 0.5,
+            "mean_gower_distance": 0.5,
         },
         {
             "config": {"lamb": 0.1},
             "base_validity": 1.0,
-            "mean_l1_robust_scale": 0.9,
+            "mean_gower_distance": 0.9,
         },
         {
             "config": {"lamb": 1.0},
             "base_validity": 1.0,
-            "mean_l1_robust_scale": 0.7,
+            "mean_gower_distance": 0.7,
         },
         {
             "config": {"lamb": 2.0},
             "base_validity": 0.9,
-            "mean_l1_robust_scale": None,
+            "mean_gower_distance": None,
         },
     ]
 
@@ -52,25 +54,25 @@ def test_missing_cost_ranks_below_any_finite_cost_at_equal_validity():
     with_cost = {
         "config": {},
         "base_validity": 1.0,
-        "mean_l1_robust_scale": 5.0,
+        "mean_gower_distance": 5.0,
     }
     without_cost = {
         "config": {},
         "base_validity": 1.0,
-        "mean_l1_robust_scale": None,
+        "mean_gower_distance": None,
     }
 
     assert selection_key(with_cost) > selection_key(without_cost)
 
 
 def test_robustness_defining_parameters_are_not_grid_tuned():
-    assert set(TUNING_GRIDS) == {"wachter", "roar_lime"}
+    assert set(TUNING_GRIDS) == {"wachter", "roar_lime", "roar"}
     roar_delta = {candidate["delta"] for candidate in TUNING_GRIDS["roar_lime"]}
     roar_sample_counts = {
         candidate["num_samples"] for candidate in TUNING_GRIDS["roar_lime"]
     }
     assert roar_delta == {0.1}
-    assert roar_sample_counts == {20_000}
+    assert roar_sample_counts == {5_000}
 
 
 def test_tuning_cache_rejects_stale_method_implementations():
@@ -109,15 +111,16 @@ def test_apas_locked_config_requires_per_seed_calibration():
     assert "delta" not in LOCKED_CONFIGS["apas"]
 
 
-def test_tuning_protocol_can_be_reused_across_benchmark_versions():
+def test_tuning_is_reused_across_benchmark_versions_for_the_same_bank_only():
     tuning = {
         "benchmark_protocol_version": "full_benchmark_v6_validity_tuning",
-        "tuning_protocol_version": "validation_v2_separate_validity_roar_paper",
-        "report": {"protocol": {"base_seed": 2026}},
+        "tuning_protocol_version": "validation_v3_gower_cost",
+        "report": {"protocol": {"base_seed": 2026, "bank_fingerprint": "bank-a"}},
     }
 
-    assert tuning_protocol_is_reusable(tuning, 2026)
-    assert not tuning_protocol_is_reusable(tuning, 2029)
+    assert tuning_protocol_is_reusable(tuning, 2026, "bank-a")
+    assert not tuning_protocol_is_reusable(tuning, 2029, "bank-a")
+    assert not tuning_protocol_is_reusable(tuning, 2026, "bank-b")
 
 
 def test_frozen_tuning_reuses_grids_but_refreshes_fixed_configs(tmp_path):
@@ -126,9 +129,7 @@ def test_frozen_tuning_reuses_grids_but_refreshes_fixed_configs(tmp_path):
         json.dumps(
             {
                 "benchmark_protocol_version": "full_benchmark_v6_validity_tuning",
-                "tuning_protocol_version": (
-                    "validation_v2_separate_validity_roar_paper"
-                ),
+                "tuning_protocol_version": ("validation_v3_gower_cost"),
                 "selected_configs": {
                     "wachter": TUNING_GRIDS["wachter"][0],
                     "roar_lime": TUNING_GRIDS["roar_lime"][0],
@@ -208,27 +209,24 @@ def test_cached_run_must_match_bank_and_base_model(tmp_path):
         }
     ).to_parquet(survival_path)
 
-    assert run_matches_config(
-        generation_path,
-        survival_path,
+    assert run_is_current(
+        tmp_path,
         config,
         [42],
         {"change-1"},
         "base-1",
         "bank-1",
     )
-    assert not run_matches_config(
-        generation_path,
-        survival_path,
+    assert not run_is_current(
+        tmp_path,
         config,
         [42],
         {"change-1"},
         "base-1",
         "different-bank",
     )
-    assert not run_matches_config(
-        generation_path,
-        survival_path,
+    assert not run_is_current(
+        tmp_path,
         config,
         [42],
         {"change-1"},

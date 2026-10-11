@@ -1,33 +1,44 @@
+from typing import ClassVar
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from robustness_benchmark.core.model import TorchBinaryModel
-from robustness_benchmark.core.training import make_betarce_generation_model
+from robustness_benchmark.core.classifiers import MLPClassifier
+from robustness_benchmark.core.model_changes import make_betarce_generation_model
+from robustness_benchmark.core.model_specs import MLPSpec
 from robustness_benchmark.evaluation.aggregate import generation_metrics
 from robustness_benchmark.methods import registry as methods
 from robustness_benchmark.methods.betarce import (
+    BetaRCEAdapter,
     BetaRCEResult,
     beta_left_bound_batch,
     beta_robustness_mask,
 )
+from robustness_benchmark.methods.configuration import default_config
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
-from robustness_benchmark.methods.robust_adapters import BetaRCEAdapter
-from robustness_benchmark.methods.robx import tau_from_stability_quantile
+from robustness_benchmark.methods.robx import robx_algorithm
+from robustness_benchmark.methods.stability import tau_from_stability_quantile
 
 
 class ExplodingGenerator:
+    last_metadata: ClassVar[dict[str, object]] = {}
+
     def generate_for_instance(self, *_args, **_kwargs):
         raise RuntimeError("expected test failure")
 
 
 class EmptyGenerator:
+    last_metadata: ClassVar[dict[str, object]] = {}
+
     def generate_for_instance(self, *_args, **_kwargs):
         return pd.DataFrame(columns=["a", "b"])
 
 
 class FactualEchoGenerator:
     """Mimic RNCE's fallback of returning the factual unchanged."""
+
+    last_metadata: ClassVar[dict[str, object]] = {}
 
     def generate_for_instance(self, factual, **_kwargs):
         return pd.DataFrame([factual.to_numpy()], columns=factual.index)
@@ -38,6 +49,7 @@ def test_generation_coverage_is_separate_from_validity():
         {
             "generation_status": ["success", "base_invalid", "exception"],
             "base_valid": [True, False, False],
+            "base_valid_before_projection": [True, True, None],
         }
     )
 
@@ -53,7 +65,7 @@ def test_generation_coverage_is_separate_from_validity():
 def test_generator_exception_is_missing_and_not_a_factual(monkeypatch):
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
     monkeypatch.setattr(
         methods, "create_generator", lambda *_args: (ExplodingGenerator(), {})
@@ -77,17 +89,23 @@ def test_generator_exception_is_missing_and_not_a_factual(monkeypatch):
 def test_robx_adaptive_variants_require_resolved_tau():
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
 
     with pytest.raises(ValueError, match="requires a calibrated tau"):
-        methods.create_generator("robx_balanced", task)
+        methods.create_generator(
+            "robx_balanced", task, method_config=default_config("robx_balanced")
+        )
 
     lower, lower_kwargs = methods.create_generator(
-        "robx_balanced", task, method_config={"tau": 0.71}
+        "robx_balanced",
+        task,
+        method_config={**default_config("robx_balanced"), "tau": 0.71},
     )
     upper, upper_kwargs = methods.create_generator(
-        "robx_robust", task, method_config={"tau": 0.89}
+        "robx_robust",
+        task,
+        method_config={**default_config("robx_robust"), "tau": 0.89},
     )
 
     assert lower_kwargs == {}
@@ -106,6 +124,30 @@ def test_robx_tau_uses_training_stability_quantile_and_probability_floor():
     assert balanced["qualifying_training_points"] == 2
     assert low_tau == 0.5
     assert low["raw_tau"] < 0.5
+
+
+def test_robx_returns_the_stable_chain_point_closest_to_the_factual():
+    # P(y=1) is 0.9 once a >= 0.5, else 0.6; tiny noise makes stability equal
+    # P(y=1). From (0, 0), the chain towards (2, 0) passes first (step 3, at
+    # (0.54, 0)) and the chain towards (1, 10) later (step 7, at 0.52 * (1, 10)),
+    # which is closer to the factual (0, 6). BetaRCE's code returns the first.
+    def probability(values):
+        return np.where(np.asarray(values)[:, 0] >= 0.5, 0.9, 0.6)
+
+    counterfactual, conservative = robx_algorithm(
+        np.array([[1.0, 10.0], [2.0, 0.0]]),
+        probability,
+        np.zeros(2),
+        variance=1e-12,
+        tau=0.8,
+        N=10,
+        k=2,
+        rng=np.random.default_rng(0),
+        factual=np.array([0.0, 6.0]),
+    )
+
+    assert len(conservative) == 2
+    np.testing.assert_allclose(counterfactual, (1 - 0.9**7) * np.array([1.0, 10.0]))
 
 
 def test_betarce_paper_confidence_requires_unanimous_32_model_ensemble():
@@ -136,12 +178,16 @@ def test_betarce_adapter_robustifies_a_base_counterfactual(monkeypatch):
         pd.Series([0, 1]),
         seed=7,
     )
+    settings = {
+        key: value
+        for key, value in default_config("betarce").items()
+        if key not in {"implementation", "generation_model_space"}
+    }
     adapter = BetaRCEAdapter(
         task,
         [TargetModel() for _ in range(32)],
         seed=7,
-        base_gs_max_iter=200,
-        gs_max_iter=100,
+        **{**settings, "base_gs_max_iter": 200, "gs_max_iter": 100},
     )
     base_counterfactual = np.array([0.4, 0.6])
     robust_counterfactual = np.array([0.5, 0.7])
@@ -154,7 +200,7 @@ def test_betarce_adapter_robustifies_a_base_counterfactual(monkeypatch):
         return base_counterfactual
 
     monkeypatch.setattr(
-        "robustness_benchmark.methods.robust_adapters.growing_spheres_search",
+        "robustness_benchmark.methods.betarce.growing_spheres_search",
         fake_base_search,
     )
 
@@ -178,15 +224,19 @@ def test_betarce_adapter_robustifies_a_base_counterfactual(monkeypatch):
 def test_betarce_bootstrap_members_keep_base_initialization(monkeypatch):
     observed = {}
 
-    def fake_fit_model(X_train, y_train, X_val, y_val, **kwargs):
+    def fake_fit_spec(spec, X_train, y_train, X_val, y_val, *, seed):
         observed["X_train"] = X_train.copy()
         observed["y_train"] = y_train.copy()
         observed["X_val"] = X_val
         observed["y_val"] = y_val
-        observed.update(kwargs)
+        observed["seed"] = seed
+        observed["hidden_dim"] = spec.hidden_dim
+        observed["epochs"] = spec.epochs
         return object()
 
-    monkeypatch.setattr("robustness_benchmark.core.training.fit_model", fake_fit_model)
+    monkeypatch.setattr(
+        "robustness_benchmark.core.model_changes.ensemble.fit_spec", fake_fit_spec
+    )
 
     class Split:
         X_train = pd.DataFrame({"a": np.arange(12)})
@@ -198,8 +248,7 @@ def test_betarce_bootstrap_members_keep_base_initialization(monkeypatch):
         Split(),
         base_seed=2026,
         member=7,
-        hidden_dim=(32, 32),
-        epochs=300,
+        spec=MLPSpec(hidden_dim=(32, 32), epochs=300),
     )
 
     assert result is not None
@@ -213,7 +262,7 @@ def test_betarce_bootstrap_members_keep_base_initialization(monkeypatch):
 def test_apas_configuration_is_explicit():
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
 
     generator, kwargs = methods.create_generator(
@@ -231,24 +280,24 @@ def test_apas_configuration_is_explicit():
     )
 
     assert kwargs == {}
-    assert generator.number_of_samples == 1_379
+    assert generator.number_of_samples == 1_378
     assert generator.delta == 0.0123
 
 
 def test_apas_has_no_implicit_fixed_delta():
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
 
-    with pytest.raises(ValueError, match="delta must be provided explicitly"):
-        methods.create_generator("apas", task, method_config={})
+    with pytest.raises(ValueError, match=r"Missing method settings: \['delta'\]"):
+        methods.create_generator("apas", task, method_config=default_config("apas"))
 
 
 def test_no_counterfactual_is_not_reported_as_an_exception(monkeypatch):
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
     monkeypatch.setattr(
         methods, "create_generator", lambda *_args: (EmptyGenerator(), {})
@@ -258,13 +307,13 @@ def test_no_counterfactual_is_not_reported_as_an_exception(monkeypatch):
 
     assert records[0]["generation_status"] == "no_counterfactual"
     assert records[0]["generation_error"] is None
-    assert records[0]["l1_scaled_mean"] is None
+    assert records[0]["base_valid"] is False
 
 
 def test_factual_returned_unchanged_is_no_counterfactual(monkeypatch):
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [0.0, 1.0]})
     y = pd.Series([0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
     monkeypatch.setattr(
         methods, "create_generator", lambda *_args: (FactualEchoGenerator(), {})

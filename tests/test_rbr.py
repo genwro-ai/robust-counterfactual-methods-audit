@@ -2,9 +2,11 @@ import numpy as np
 import pandas as pd
 import torch
 
-from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.core.classifiers import MLPClassifier
+from robustness_benchmark.core.schema import FeatureSchema
+from robustness_benchmark.methods.configuration import default_config
 from robustness_benchmark.methods.rbr import LabelPredictor, RBRAdapter
-from robustness_benchmark.methods.registry import make_task
+from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
 
 
 class FixedRBR:
@@ -22,7 +24,7 @@ class FixedRBR:
 def linear_task():
     X = pd.DataFrame({"a": [-1.0, 0.0, 1.0], "b": [0.0, 0.0, 0.0]})
     y = pd.Series([0, 0, 1])
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     with torch.no_grad():
         linear = model.get_torch_model()[0]
         linear.weight.copy_(torch.tensor([[5.0, 0.0]]))
@@ -65,3 +67,43 @@ def test_rbr_adapter_records_scale_and_author_settings():
     assert adapter.last_metadata["rbr_outcome"] == "success"
     assert adapter.last_metadata["rbr_epsilon_op"] == 0.5
     assert adapter.last_metadata["rbr_epsilon_pe"] == 0.5
+
+
+def test_rbr_returns_no_counterfactual_when_the_loss_is_undefined():
+    # The boundary point sits at a ~ 0.21 against a boundary at a = 0.2. A ball
+    # of radius 4e-4 around it holds only favorable samples, so the loss has
+    # no adverse term; the authors' code crashed reshaping the empty set.
+    X, _, task = linear_task()
+
+    _, rows = generate_counterfactuals(
+        "rbr",
+        task,
+        X.iloc[[0]],
+        method_config={
+            **default_config("rbr"),
+            "perturb_radius_fraction": 2e-4,
+            "num_samples": 50,
+        },
+    )
+
+    assert rows[0]["generation_status"] == "no_counterfactual"
+    assert rows[0]["rbr_outcome"] == "no_counterfactual"
+
+
+def test_rbr_returns_no_counterfactual_without_a_boundary_point():
+    # The only favorable training point differs in the immutable b; with the
+    # factual's b it is adverse, so the line search finds no boundary.
+    X = pd.DataFrame({"a": [-1.0, 0.0], "b": [0.0, 1.0]})
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
+    with torch.no_grad():
+        linear = model.get_torch_model()[0]
+        linear.weight.copy_(torch.tensor([[5.0, 10.0]]))
+        linear.bias.copy_(torch.tensor([-1.0]))
+    schema = FeatureSchema(columns=("a", "b"), immutable=("b",))
+    task = make_task(model, X, pd.Series([0, 1]), seed=4, schema=schema)
+
+    _, rows = generate_counterfactuals(
+        "rbr", task, X.iloc[[0]], method_config=default_config("rbr")
+    )
+
+    assert rows[0]["generation_status"] == "no_counterfactual"

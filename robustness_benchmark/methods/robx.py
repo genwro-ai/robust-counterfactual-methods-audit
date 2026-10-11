@@ -1,181 +1,37 @@
+"""RobX (Dutta et al., ICML 2022) on top of growing spheres.
+
+Faithful to the paper and the BetaRCE implementation: interpolation and the
+Gaussian stability test treat every encoded column, one-hot and immutable ones
+included, as continuous. Only the start counterfactual comes from the
+benchmark's shared growing spheres, which respects the feature schema; the
+registry projects the returned point before checking validity, like every
+method's.
+
+Each of the c chains moves towards its conservative counterfactual until it
+passes the stability test, and the passing point closest to the factual is
+returned, as in the paper's Algorithm 1; BetaRCE's ``robx_algorithm`` returns
+the first point to pass. One fix to the reference code: stability is measured
+for a point's own class, so an iterate is accepted only if the model also
+assigns it the counterfactual's class.
+
+Its settings (``LOCKED_CONFIGS``) are k = 3 conservative counterfactuals and
+100 iterations (Algorithm 1; BetaRCE's ``robx_algorithm`` defaults), and
+growing spheres with 100 samples, p = 2, step 0.1 and 100 iterations (``gs``
+in BetaRCE's configs/config_exp.yaml).
+"""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
+from robustness_benchmark.core.classifiers import predict_crisp, predict_proba
+from robustness_benchmark.core.schema import FeatureSchema
+from robustness_benchmark.methods.configuration import ROBX_IMPLEMENTATION
 from robustness_benchmark.methods.growing_spheres import growing_spheres_search
-
-
-def _counterfactual_stability_batch(
-    xs: np.ndarray,
-    pred_func: Callable[[np.ndarray], np.ndarray],
-    variance: np.ndarray | float,
-    N: int,
-    gamma: float,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    B, d = xs.shape
-    results = np.full(B, np.nan)
-    valid_mask = np.all(np.isfinite(xs), axis=1)
-    if not np.any(valid_mask):
-        return results
-
-    valid_xs = xs[valid_mask]
-    B_valid = valid_xs.shape[0]
-
-    if isinstance(variance, np.ndarray):
-        variance = np.asarray(variance)
-        if variance.ndim == 1:
-            std = np.sqrt(np.clip(variance, 1e-12, None))
-            noise = rng.standard_normal((B_valid, N, d)) * std[None, None, :]
-        elif variance.ndim == 2:
-            try:
-                noise = rng.multivariate_normal(
-                    np.zeros(d), variance, size=(B_valid * N,)
-                )
-                noise = noise.reshape(B_valid, N, d)
-            except (ValueError, np.linalg.LinAlgError, FloatingPointError):
-                return results
-        else:
-            raise ValueError("variance must be 1D or 2D")
-    else:
-        std = np.sqrt(max(float(variance), 1e-12))
-        noise = rng.standard_normal((B_valid, N, d)) * std
-
-    X_p = valid_xs[:, None, :] + noise
-    finite_per_point = np.all(np.isfinite(X_p.reshape(B_valid, -1)), axis=1)
-
-    orig_preds = pred_func(valid_xs)
-    cf_classes = (orig_preds > gamma).astype(int)
-
-    all_preds = pred_func(X_p.reshape(B_valid * N, d)).reshape(B_valid, N)
-    X_pred = np.where(cf_classes[:, None] == 1, all_preds, 1.0 - all_preds)
-    stabilities = np.mean(X_pred, axis=1) - np.std(X_pred, axis=1)
-    stabilities[~finite_per_point] = np.nan
-    results[valid_mask] = stabilities
-    return results
-
-
-def counterfactual_stability(
-    x: np.ndarray,
-    pred_func: Callable[[np.ndarray], np.ndarray],
-    variance: np.ndarray | float = 0.1,
-    N: int = 100,
-    gamma: float = 0.5,
-    rng: np.random.Generator | None = None,
-) -> float:
-    if rng is None:
-        rng = np.random.default_rng()
-    x = np.asarray(x).reshape(1, -1)
-    return float(
-        _counterfactual_stability_batch(x, pred_func, variance, N, gamma, rng)[0]
-    )
-
-
-def training_target_stability_scores(
-    X_train: np.ndarray,
-    predict_target_proba_fn: Callable[[np.ndarray], np.ndarray],
-    *,
-    variance: np.ndarray | float = 0.01,
-    N: int = 1_000,
-    gamma: float = 0.5,
-    seed: int = 0,
-    batch_size: int = 128,
-) -> tuple[np.ndarray, int]:
-    """Measure local stability for base-predicted target training points."""
-
-    if N < 1:
-        raise ValueError("N must be positive")
-    if batch_size < 1:
-        raise ValueError("batch_size must be positive")
-
-    values = np.asarray(X_train)
-    target_probabilities = np.asarray(predict_target_proba_fn(values)).reshape(-1)
-    target_points = values[target_probabilities > gamma]
-    if target_points.size == 0:
-        raise ValueError("RobX tau calibration found no target-class training points")
-
-    rng = np.random.default_rng(seed)
-    score_batches = []
-    for start in range(0, len(target_points), batch_size):
-        score_batches.append(
-            _counterfactual_stability_batch(
-                target_points[start : start + batch_size],
-                predict_target_proba_fn,
-                variance,
-                N,
-                gamma,
-                rng,
-            )
-        )
-    scores = np.concatenate(score_batches)
-    finite_scores = scores[np.isfinite(scores)]
-    if finite_scores.size == 0:
-        raise ValueError("RobX tau calibration produced no finite stability scores")
-    return finite_scores, len(target_points)
-
-
-def tau_from_stability_quantile(
-    scores: np.ndarray,
-    *,
-    quantile: float,
-    gamma: float = 0.5,
-    target_training_points: int | None = None,
-) -> tuple[float, dict[str, int | float]]:
-    """Select a RobX threshold from a training-stability quantile."""
-
-    if not 0 < quantile < 1:
-        raise ValueError("quantile must lie strictly between zero and one")
-    finite_scores = np.asarray(scores)[np.isfinite(scores)]
-    if finite_scores.size == 0:
-        raise ValueError("RobX tau calibration received no finite stability scores")
-
-    raw_tau = float(np.quantile(finite_scores, quantile))
-    tau = max(gamma, raw_tau)
-    return tau, {
-        "quantile": quantile,
-        "target_training_points": int(target_training_points or len(finite_scores)),
-        "finite_stability_scores": len(finite_scores),
-        "qualifying_training_points": int(np.sum(finite_scores > tau)),
-        "raw_tau": raw_tau,
-        "tau": tau,
-    }
-
-
-def calibrate_tau_from_training_quantile(
-    X_train: np.ndarray,
-    predict_target_proba_fn: Callable[[np.ndarray], np.ndarray],
-    *,
-    quantile: float,
-    variance: np.ndarray | float = 0.01,
-    N: int = 1_000,
-    gamma: float = 0.5,
-    seed: int = 0,
-    batch_size: int = 128,
-) -> tuple[float, dict[str, int | float]]:
-    """Calibrate RobX's threshold from favorable training-point stability.
-
-    Dutta et al. recommend choosing a dataset-dependent quantile of the
-    stability-score histogram. Calibration is performed only on points that
-    the base model assigns to the target class. No changed model is consulted.
-    """
-
-    scores, target_training_points = training_target_stability_scores(
-        X_train,
-        predict_target_proba_fn,
-        variance=variance,
-        N=N,
-        gamma=gamma,
-        seed=seed,
-        batch_size=batch_size,
-    )
-    return tau_from_stability_quantile(
-        scores,
-        quantile=quantile,
-        gamma=gamma,
-        target_training_points=target_training_points,
-    )
+from robustness_benchmark.methods.stability import counterfactual_stability_batch
 
 
 def get_conservative_counterfactuals(
@@ -205,7 +61,7 @@ def get_conservative_counterfactuals(
     conservative = []
     for start in range(0, len(data), _batch_size):
         batch = data[start : start + _batch_size]
-        stabilities = _counterfactual_stability_batch(
+        stabilities = counterfactual_stability_batch(
             batch, predict_class_proba_fn, variance, N, gamma, rng
         )
         for x, s in zip(batch, stabilities):
@@ -229,11 +85,18 @@ def robx_algorithm(
     robx_lambda: float = 0.1,
     gamma: float = 0.5,
     rng: np.random.Generator | None = None,
+    *,
+    factual: np.ndarray,
+    p_norm: int = 2,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Algorithm 1: the stable chain point closest to ``factual`` in ``p_norm``.
+
+    A chain that does not pass within ``robx_max_iter`` steps is dropped.
+    """
     if rng is None:
         rng = np.random.default_rng()
 
-    init_stability = _counterfactual_stability_batch(
+    init_stability = counterfactual_stability_batch(
         start_counterfactual.reshape(1, -1),
         predict_class_proba_fn,
         variance,
@@ -258,24 +121,35 @@ def robx_algorithm(
     if conservative_cfs is None:
         return None, None
 
+    target_side = predict_class_proba_fn(start_counterfactual.reshape(1, -1))[0] > gamma
     counterfactuals = np.tile(start_counterfactual, (len(conservative_cfs), 1))
+    stable = np.zeros(len(conservative_cfs), dtype=bool)
     for _ in range(robx_max_iter):
-        counterfactuals = (
-            robx_lambda * conservative_cfs + (1.0 - robx_lambda) * counterfactuals
+        moving = ~stable
+        counterfactuals[moving] = (
+            robx_lambda * conservative_cfs[moving]
+            + (1.0 - robx_lambda) * counterfactuals[moving]
         )
-        stabilities = _counterfactual_stability_batch(
-            counterfactuals,
+        stabilities = counterfactual_stability_batch(
+            counterfactuals[moving],
             predict_class_proba_fn,
             variance,
             N,
             gamma,
             rng,
         )
-        stable_mask = stabilities > tau
-        if np.any(stable_mask):
-            return counterfactuals[np.argmax(stable_mask)], conservative_cfs
-
-    return None, None
+        stable[moving] = (stabilities > tau) & (
+            (predict_class_proba_fn(counterfactuals[moving]) > gamma) == target_side
+        )
+        if stable.all():
+            break
+    if not stable.any():
+        return None, None
+    candidates = counterfactuals[stable]
+    distances = np.linalg.norm(
+        candidates - np.asarray(factual).reshape(1, -1), ord=p_norm, axis=1
+    )
+    return candidates[np.argmin(distances)], conservative_cfs
 
 
 @dataclass
@@ -295,8 +169,10 @@ class RobX:
         binary_indices: list[int] | None = None,
         feature_min: np.ndarray | None = None,
         feature_max: np.ndarray | None = None,
+        schema: FeatureSchema | None = None,
     ) -> None:
         self.X_train = np.asarray(X_train)
+        self.schema = schema
         self.predict_fn_crisp = predict_fn_crisp
         self.predict_proba_fn = predict_proba_fn
         self.binary_indices = binary_indices
@@ -344,6 +220,7 @@ class RobX:
             feature_min=self.feature_min,
             feature_max=self.feature_max,
             rng=rng,
+            schema=self.schema,
         )
 
         if start_cf is None:
@@ -364,7 +241,79 @@ class RobX:
             robx_lambda=robx_lambda,
             gamma=gamma,
             rng=rng,
+            factual=start_instance,
+            p_norm=gs_p_norm,
         )
 
         status = "ok" if robust_cf is not None else "no_robust_cf"
         return RobXResult(robust_cf, start_cf, conservative_cfs, {"status": status})
+
+
+class RobXAdapter:
+    def __init__(
+        self,
+        task,
+        *,
+        seed: int,
+        variance: float,
+        tau: float,
+        stability_samples: int,
+        k: int,
+        max_iter: int,
+        robx_lambda: float,
+        gs_n_search_samples: int,
+        gs_p_norm: int,
+        gs_step: float,
+        gs_max_iter: int,
+    ) -> None:
+        self.task = task
+        self.seed = seed
+        self.variance = variance
+        self.tau = tau
+        self.stability_samples = stability_samples
+        self.search = {
+            "k": k,
+            "robx_max_iter": max_iter,
+            "robx_lambda": robx_lambda,
+            "gs_n_search_samples": gs_n_search_samples,
+            "gs_p_norm": gs_p_norm,
+            "gs_step": gs_step,
+            "gs_max_iter": gs_max_iter,
+        }
+        X_train = task.training_data.X.to_numpy()
+        self.generator = RobX(
+            X_train,
+            lambda values: predict_crisp(task.model, values),
+            lambda values: predict_proba(task.model, values),
+            feature_min=X_train.min(axis=0),
+            feature_max=X_train.max(axis=0),
+            schema=task.schema,
+        )
+        self.last_metadata: dict[str, object] = {}
+
+    def generate_for_instance(
+        self, factual: pd.Series, *, neg_value: int = 0, **_kwargs: object
+    ) -> pd.DataFrame:
+        result = self.generator.generate(
+            factual.to_numpy(),
+            target_class=1 - neg_value,
+            variance=self.variance,
+            tau=self.tau,
+            N=self.stability_samples,
+            **self.search,
+            rng=np.random.default_rng(self.seed),
+        )
+        self.last_metadata = {
+            f"robx_{key}": value
+            for key, value in {
+                **result.metadata,
+                "implementation": ROBX_IMPLEMENTATION,
+                "variance": self.variance,
+                "tau": self.tau,
+                "stability_samples": self.stability_samples,
+                "k": self.search["k"],
+            }.items()
+        }
+        if result.counterfactual is None:
+            return pd.DataFrame(columns=factual.index)
+        return pd.DataFrame([result.counterfactual], columns=factual.index)

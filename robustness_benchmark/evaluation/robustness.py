@@ -1,88 +1,11 @@
+"""Robustness of counterfactuals under model changes."""
+
 import json
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import balanced_accuracy_score
 
-from robustness_benchmark.core.training import ChangedModel
-
-
-def behavioral_distance(
-    base_model, changed_model, X_reference: pd.DataFrame
-) -> dict[str, float]:
-    base_probability = base_model.predict(X_reference).iloc[:, 0].to_numpy()
-    changed_probability = changed_model.predict(X_reference).iloc[:, 0].to_numpy()
-    return {
-        "hard_disagreement": float(
-            np.mean((base_probability >= 0.5) != (changed_probability >= 0.5))
-        ),
-        "probability_mae": float(
-            np.mean(np.abs(base_probability - changed_probability))
-        ),
-    }
-
-
-def assess_model_changes(
-    changes: list[ChangedModel],
-    base_model,
-    X_reference: pd.DataFrame,
-    y_reference: pd.Series,
-    *,
-    maximum_accuracy_drop: float = 0.03,
-) -> list[dict[str, object]]:
-    """Measure candidate quality and relatively stratify the complete model bank."""
-
-    base_probability = base_model.predict(X_reference).iloc[:, 0].to_numpy()
-    labels = y_reference.to_numpy()
-    base_prediction = (base_probability >= 0.5).astype(int)
-    base_accuracy = float(balanced_accuracy_score(labels, base_prediction))
-    rows: list[dict[str, object]] = []
-    for change in changes:
-        changed_probability = change.model.predict(X_reference).iloc[:, 0].to_numpy()
-        changed_prediction = (changed_probability >= 0.5).astype(int)
-        changed_accuracy = float(balanced_accuracy_score(labels, changed_prediction))
-        accuracy_drop = base_accuracy - changed_accuracy
-        rows.append(
-            {
-                "change_id": change.change_id,
-                "change_family": change.change_family,
-                "change_level": change.change_level,
-                **behavioral_distance(base_model, change.model, X_reference),
-                "base_reference_balanced_accuracy": base_accuracy,
-                "changed_reference_balanced_accuracy": changed_accuracy,
-                "balanced_accuracy_drop": accuracy_drop,
-                "quality_pass": accuracy_drop <= maximum_accuracy_drop,
-                "maximum_accuracy_drop": maximum_accuracy_drop,
-                "metadata": change.metadata,
-            }
-        )
-
-    stratify_severity(rows)
-    return rows
-
-
-def stratify_severity(rows: list[dict[str, object]]) -> None:
-    """Relabel every candidate with relative severity from behavioral distance.
-
-    This is the single stratification rule shared by bank construction and
-    bank loading; every candidate participates, without quality exclusions.
-    """
-
-    ordered = sorted(
-        rows,
-        key=lambda row: (row["probability_mae"], row["hard_disagreement"]),
-    )
-    denominator = max(len(ordered), 1)
-    for rank, row in enumerate(ordered, start=1):
-        percentile = (rank - 0.5) / denominator
-        row["severity_percentile"] = percentile
-        row["severity"] = (
-            "low"
-            if percentile <= 1 / 3
-            else "medium"
-            if percentile <= 2 / 3
-            else "high"
-        )
+from robustness_benchmark.core.model_changes import ChangedModel, behavioral_distance
 
 
 def evaluate_survival(

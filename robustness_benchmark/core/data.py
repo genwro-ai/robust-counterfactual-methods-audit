@@ -1,39 +1,14 @@
-from collections.abc import Collection
+"""The frozen train/update/validation/test split of an encoded dataset."""
+
 from dataclasses import dataclass
-from pathlib import Path
 
 import pandas as pd
-from sklearn.datasets import load_breast_cancer
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-
-HELOC_DROPPED_FEATURES = (
-    "MSinceMostRecentDelq",
-    "MSinceMostRecentInqexcl7days",
-    "NetFractionInstallBurden",
-)
-
-
-def encode_favorable(
-    y_raw: pd.Series, favorable_values: Collection[object]
-) -> pd.Series:
-    """Encode raw dataset labels into the fixed harness contract.
-
-    The whole pipeline assumes 0 = adverse and 1 = favorable: adverse-factual
-    selection, generation with ``neg_value=0``, base validity at class 1, and
-    survival at probability >= 0.5. Raw label semantics are dataset dependent
-    (e.g. Pima's raw 1 means diabetes, an adverse outcome), so every loader
-    must remap through this helper rather than passing raw labels along.
-    """
-
-    encoded = y_raw.isin(list(favorable_values)).astype(int)
-    if encoded.nunique() != 2:
-        raise ValueError(
-            "Encoded labels must contain both an adverse and a favorable class"
-        )
-    return encoded.rename("target")
+from robustness_benchmark.core.datasets import load_raw_dataset
+from robustness_benchmark.core.protocol import SPLIT_SEED, SPLIT_VERSION
+from robustness_benchmark.core.schema import FeatureSchema
 
 
 @dataclass(frozen=True)
@@ -52,12 +27,17 @@ class DatasetSplit:
     y_test: pd.Series
     adverse_label: int = 0
     favorable_label: int = 1
+    schema: FeatureSchema | None = None
+
+    @property
+    def feature_schema(self) -> FeatureSchema:
+        return self.schema or FeatureSchema.numeric_only(self.X_train.columns)
 
     def __post_init__(self) -> None:
         if (self.adverse_label, self.favorable_label) != (0, 1):
             raise ValueError(
                 "The label contract is fixed at 0 = adverse, 1 = favorable; "
-                "loaders must remap raw labels via encode_favorable instead"
+                "loaders must remap raw labels via datasets.encode_favorable"
             )
         for split_name, labels in (
             ("train", self.y_train),
@@ -72,40 +52,22 @@ class DatasetSplit:
                 )
 
 
-def _frame(values, columns: list[str], index: pd.Index) -> pd.DataFrame:
-    frame = pd.DataFrame(values, columns=pd.Index(columns), index=index)
-    frame.index.name = "dataset_row_id"
-    return frame
-
-
-def select_adverse_indices(
-    probabilities: pd.Series,
-    requested: int,
-    seed: int,
-    threshold: float = 0.5,
-) -> pd.Index:
-    """Select a seeded, capped sample of model-adverse row identifiers."""
-
-    if requested < 1:
-        raise ValueError("requested must be positive")
-    available = probabilities.index[probabilities < threshold].to_numpy()
-    size = min(requested, len(available))
-    selected = pd.Index(
-        pd.Series(available).sample(n=size, random_state=seed).to_numpy()
-    )
-    selected.name = probabilities.index.name
-    return selected
-
-
 def load_dataset(
-    name: str, seed: int = 2026, split_version: str = "behavior_v3"
+    name: str, seed: int = SPLIT_SEED, split_version: str = SPLIT_VERSION
 ) -> DatasetSplit:
-    """Load and freeze one numeric binary-classification benchmark dataset."""
+    """Load, encode and freeze one binary-classification benchmark dataset.
 
-    if split_version != "behavior_v3":
+    Nominal features become one-hot 0/1 groups over every category in the
+    loaded dataset, so all splits share columns. Only numeric columns are
+    standardized, with statistics from the training split.
+    """
+
+    if split_version != SPLIT_VERSION:
         raise ValueError(f"Unknown split version {split_version!r}")
 
-    X, y, source, favorable_source_label = _load_raw_dataset(name)
+    raw = load_raw_dataset(name)
+    X, categorical = _one_hot(raw.X)
+    y = raw.y
 
     # Frozen protocol: 50% base training, 10% reserved update pool, 10%
     # validation, and 30% untouched test data.
@@ -127,89 +89,54 @@ def load_dataset(
         stratify=y_val_test,
     )
 
-    scaler = StandardScaler().fit(X_train)
-    columns = X.columns.tolist()
+    one_hot = {column for group in categorical.values() for column in group}
+    numeric = [column for column in X.columns if column not in one_hot]
+    scaler = StandardScaler().fit(X_train[numeric])
+
+    def standardize(frame: pd.DataFrame) -> pd.DataFrame:
+        scaled = frame.astype(float)
+        scaled[numeric] = scaler.transform(frame[numeric])
+        scaled.index.name = "dataset_row_id"
+        return scaled
+
     return DatasetSplit(
         name=name,
-        source=source,
+        source=raw.source,
         split_version=split_version,
-        favorable_source_label=favorable_source_label,
-        X_train=_frame(scaler.transform(X_train), columns, X_train.index),
+        favorable_source_label=raw.favorable_source_label,
+        X_train=standardize(X_train),
         y_train=y_train.rename("target"),
-        X_update=_frame(scaler.transform(X_update), columns, X_update.index),
+        X_update=standardize(X_update),
         y_update=y_update.rename("target"),
-        X_val=_frame(scaler.transform(X_val), columns, X_val.index),
+        X_val=standardize(X_val),
         y_val=y_val.rename("target"),
-        X_test=_frame(scaler.transform(X_test), columns, X_test.index),
+        X_test=standardize(X_test),
         y_test=y_test.rename("target"),
+        schema=FeatureSchema(
+            columns=tuple(X.columns),
+            categorical=categorical,
+            numeric_scale={
+                column: (float(mean), float(scale))
+                for column, mean, scale in zip(
+                    numeric, scaler.mean_, scaler.scale_, strict=True
+                )
+            },
+            integer=raw.integer,
+            immutable=raw.immutable,
+        ),
     )
 
 
-def _load_raw_dataset(
-    name: str,
-) -> tuple[pd.DataFrame, pd.Series, str, str]:
-    if name == "breast_cancer":
-        raw = load_breast_cancer(as_frame=True)
-        return (
-            raw.data,
-            encode_favorable(raw.target, favorable_values=(1,)),
-            "sklearn.datasets.load_breast_cancer",
-            "benign (raw target 1)",
-        )
+def _one_hot(X: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, tuple[str, ...]]]:
+    """Replace each non-numeric column by ``<feature>=<category>`` 0/1 columns."""
 
-    specifications = {
-        "diabetes": {
-            "target": "Outcome",
-            "favorable_values": (0,),
-            "favorable_source_label": "no diabetes (raw Outcome 0)",
-            "drop_negative_features": False,
-        },
-        "wine_quality": {
-            "target": "quality",
-            "favorable_values": (True,),
-            "favorable_source_label": "good quality (raw quality True)",
-            "drop_negative_features": False,
-        },
-        "heloc": {
-            "target": "RiskPerformance",
-            "favorable_values": ("Good",),
-            "favorable_source_label": "good credit risk (raw RiskPerformance Good)",
-            "drop_negative_features": True,
-            "drop_columns_before_missing_rows": HELOC_DROPPED_FEATURES,
-        },
-    }
-    if name not in specifications:
-        supported = ["breast_cancer", *specifications]
-        raise ValueError(f"Unknown dataset {name!r}; supported datasets: {supported}")
-
-    path = DATA_DIR / f"{name}.csv"
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"Dataset {name!r} not found at {path}; expected the repository's "
-            "data directory to contain it"
+    categorical = X.select_dtypes(exclude="number").columns
+    parts = [X.drop(columns=categorical)]
+    groups = {}
+    for feature in categorical:
+        dummies = pd.get_dummies(
+            X[feature], prefix=feature, prefix_sep="=", dtype=float
         )
-    raw = pd.read_csv(path)
-    specification = specifications[name]
-    target = str(specification["target"])
-    X = raw.drop(columns=[target]).apply(pd.to_numeric, errors="raise")
-    dropped_columns = specification.get("drop_columns_before_missing_rows", ())
-    if not isinstance(dropped_columns, Collection):
-        raise TypeError("drop_columns_before_missing_rows must be a collection")
-    X = X.drop(columns=list(dropped_columns))
-    if bool(specification["drop_negative_features"]):
-        # Follow the published RobX HELOC preprocessing: first remove the three
-        # features with extensive missingness, then exclude rows that retain a
-        # negative special-value sentinel. This leaves 8,291 complete rows and
-        # 20 numeric features without introducing imputable CFE dimensions.
-        X = X.loc[~X.lt(0).any(axis=1)]
-    y_raw = raw.loc[X.index, target]
-    favorable_values = specification["favorable_values"]
-    if not isinstance(favorable_values, Collection):
-        raise TypeError("favorable_values must be a collection")
-    y = encode_favorable(y_raw, favorable_values=favorable_values)
-    return (
-        X,
-        y,
-        f"data/{name}.csv",
-        str(specification["favorable_source_label"]),
-    )
+        groups[feature] = tuple(dummies.columns)
+        parts.append(dummies)
+    return pd.concat(parts, axis=1), groups

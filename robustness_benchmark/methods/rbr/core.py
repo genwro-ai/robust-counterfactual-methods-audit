@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from sklearn.utils import check_random_state
 
-from robustness_benchmark.methods.rbr_loss import RBRLoss
+from robustness_benchmark.methods.rbr.loss import RBRLoss
 
 
 class RBR:
@@ -19,8 +19,10 @@ class RBR:
         max_iter=1000,
         random_state=None,
         device="cuda",
+        frozen=None,
     ):
         self.random_state = check_random_state(random_state)
+        self.frozen = list(frozen or [])
         self.model = model
         self.max_iter = max_iter
         self.y_target = y_target
@@ -49,6 +51,9 @@ class RBR:
         x_cfact_list = self.train_data[order[self.train_label[order] == (1 - x_label)]][
             :k
         ]
+        if self.frozen:
+            x_cfact_list = x_cfact_list.clone()
+            x_cfact_list[:, self.frozen] = x[self.frozen]
         best_x_b = None
         best_dist = torch.tensor(float("inf"))
 
@@ -121,6 +126,8 @@ class RBR:
             F, pe, op = loss_fn(x_t)
 
             F.backward()
+            if self.frozen:
+                x_t.grad[self.frozen] = 0.0
             if verbose:
                 print(f"Iteration {t + 1}/{self.max_iter}")
                 print(x_t)
@@ -176,6 +183,9 @@ class RBR:
         self.delta_plus = delta_plus
         x = x0.clone()
         x_b, delta_base = self.find_x_boundary(x)
+        if x_b is None:
+            self.feasible = False
+            return None
 
         x_b = x_b.detach().clone()
         delta_base = delta_base.detach().clone()
@@ -189,6 +199,10 @@ class RBR:
         ).float()
 
         y_feas = self.make_prediction(X_feas).to(self.device)
+        if (y_feas == self.y_target).all() or (y_feas != self.y_target).all():
+            # The loss contrasts both classes around x_b; one is missing.
+            self.feasible = False
+            return None
 
         X_feas_pos = X_feas[y_feas == self.y_target].reshape(
             [sum(y_feas == self.y_target), -1]

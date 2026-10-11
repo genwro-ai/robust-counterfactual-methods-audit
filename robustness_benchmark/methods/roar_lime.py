@@ -1,3 +1,14 @@
+"""ROAR (Upadhyay et al., NeurIPS 2021) on a local LIME surrogate.
+
+Immutable columns get zero gradient in the ROAR optimizer, so they keep the
+factual's values. As in AI4LIFE's ``get_recourse``, Adam stops once the loss
+changes by at most ``loss_threshold`` (1e-4) and the relaxed iterate is
+returned: one-hot and integer columns are searched as continuous, and the
+registry's final projection makes the point a valid encoding. LIME's
+surrogate samples perturb one-hot columns as continuous inputs; they only
+probe the black box and are never returned.
+"""
+
 from typing import Any
 
 import numpy as np
@@ -6,7 +17,9 @@ import torch
 from lime.lime_tabular import LimeTabularExplainer
 from sklearn.linear_model import LogisticRegression
 
-ROAR_LIME_IMPLEMENTATION = "upadhyay2021_box_logistic_lime_v2"
+from robustness_benchmark.methods.configuration import ROAR_LIME_IMPLEMENTATION
+from robustness_benchmark.methods.roar import optimize_roar
+
 LIME_PARAMETER_DECIMALS = 4
 
 
@@ -65,81 +78,18 @@ def input_space_parameters(
     scale: np.ndarray,
     mean: np.ndarray,
 ) -> tuple[np.ndarray, float]:
-    """Convert LIME's standardized linear model to the task input coordinates."""
+    """Convert LIME's standardized linear model to the task input coordinates.
+
+    LIME fits its surrogate on features scaled by the training mean and std
+    (``explainer.scaler``) and reports coefficients in those units. AI4LIFE's
+    ``lime_explanation`` feeds them to ROAR unconverted, which matches the
+    model only on data that is already standardized; converting keeps ROAR's
+    objective in the coordinates it optimizes over.
+    """
 
     coefficients = scaled_coefficients / scale
     intercept = scaled_intercept - float(np.sum(scaled_coefficients * mean / scale))
     return coefficients, intercept
-
-
-def worst_case_parameter_shift(
-    values: torch.Tensor, target: int, delta: float
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return the exact box-constrained shift that maximizes binary CE loss."""
-
-    direction = -1.0 if target == 1 else 1.0
-    weight_shift = direction * delta * torch.sign(values)
-    intercept_shift = values.new_tensor(direction * delta)
-    return weight_shift, intercept_shift
-
-
-def optimize_roar(
-    factual: np.ndarray,
-    coefficients: np.ndarray,
-    intercept: float,
-    *,
-    target: int,
-    delta: float,
-    lambda_param: float,
-    learning_rate: float,
-    loss_threshold: float,
-    maximum_iterations: int,
-) -> tuple[np.ndarray, int, bool, float, float]:
-    """Optimize the published ROAR min-max binary-cross-entropy objective."""
-
-    x = torch.as_tensor(factual, dtype=torch.float32)
-    weights = torch.as_tensor(coefficients, dtype=torch.float32)
-    bias = x.new_tensor(intercept)
-    target_tensor = x.new_tensor(float(target))
-    candidate = x.clone().requires_grad_(True)
-    optimizer = torch.optim.Adam([candidate], lr=learning_rate)
-
-    previous_loss: torch.Tensor | None = None
-    converged = False
-    iterations = 0
-    validity_loss = x.new_tensor(float("nan"))
-    cost = x.new_tensor(float("nan"))
-    for iterations in range(1, maximum_iterations + 1):
-        weight_shift, intercept_shift = worst_case_parameter_shift(
-            candidate, target, delta
-        )
-        optimizer.zero_grad()
-        worst_logit = (
-            torch.dot(weights + weight_shift, candidate) + bias + intercept_shift
-        )
-        validity_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            worst_logit, target_tensor
-        )
-        cost = torch.linalg.vector_norm(candidate - x, ord=1)
-        loss = validity_loss + lambda_param * cost
-        loss.backward()
-        optimizer.step()
-
-        if (
-            previous_loss is not None
-            and torch.abs(previous_loss - loss.detach()) <= loss_threshold
-        ):
-            converged = True
-            break
-        previous_loss = loss.detach().clone()
-
-    return (
-        candidate.detach().cpu().numpy(),
-        iterations,
-        converged,
-        float(validity_loss.detach()),
-        float(cost.detach()),
-    )
 
 
 class RoarLimeAdapter:
@@ -150,12 +100,12 @@ class RoarLimeAdapter:
         task: Any,
         *,
         seed: int,
-        num_samples: int = 20_000,
-        delta: float = 0.1,
-        lambda_param: float = 0.01,
-        learning_rate: float = 0.001,
-        loss_threshold: float = 0.0001,
-        maximum_iterations: int = 20_000,
+        num_samples: int,
+        delta: float,
+        lambda_param: float,
+        learning_rate: float,
+        loss_threshold: float,
+        maximum_iterations: int,
     ) -> None:
         self.task = task
         self.seed = seed
@@ -224,6 +174,7 @@ class RoarLimeAdapter:
             learning_rate=self.learning_rate,
             loss_threshold=self.loss_threshold,
             maximum_iterations=self.maximum_iterations,
+            frozen=self.task.schema.immutable_columns(),
         )
         result = pd.DataFrame([ce], columns=instance.index)
         factual_surrogate_probability = float(

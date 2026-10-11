@@ -1,18 +1,17 @@
 import pandas as pd
 
-from robustness_benchmark.core.model import TorchBinaryModel
-from robustness_benchmark.core.training import ChangedModel
-from robustness_benchmark.evaluation.metrics import (
+from robustness_benchmark.core.classifiers import MLPClassifier
+from robustness_benchmark.core.model_bank import (
     assess_model_changes,
-    behavioral_distance,
-    evaluate_survival,
     stratify_severity,
 )
-from robustness_benchmark.evaluation.summaries import survival_summary
+from robustness_benchmark.core.model_changes import ChangedModel, behavioral_distance
+from robustness_benchmark.evaluation.aggregate import change_survival_summary
+from robustness_benchmark.evaluation.robustness import evaluate_survival
 
 
 def test_behavioral_distance_is_zero_for_identical_model():
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [1.0, 0.0]})
 
     result = behavioral_distance(model, model, X)
@@ -120,13 +119,13 @@ def test_survival_summary_keeps_validity_and_conditioning_denominators():
             }
         )
 
-    summary = survival_summary(pd.DataFrame(rows))[0]
+    summary = change_survival_summary(pd.DataFrame(rows))[0]
 
     assert summary["total_n"] == 3
     assert summary["base_valid_pairs_n"] == 2
     assert summary["base_validity_rate"] == 2 / 3
     assert summary["conditional_eligible_n"] == 1
     assert summary["factual_eligibility_rate"] == 1 / 2
-    assert summary["conditional_survival"] == 1.0
+    assert summary["pooled_conditional_survival"] == 1.0
     assert summary["changed_validity_given_base_valid"] == 1.0
     assert summary["end_to_end_changed_validity"] == 2 / 3

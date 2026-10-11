@@ -3,8 +3,9 @@ from gurobipy import GRB, Model
 from gurobipy.gurobipy import quicksum
 
 from robustness_benchmark.core.task import ClassificationTask
-from robustness_benchmark.methods.ce_generator import CEGenerator
-from robustness_benchmark.methods.optimization import OptSolver
+from robustness_benchmark.methods.base import CEGenerator
+from robustness_benchmark.methods.feature_constraints import mutable_groups
+from robustness_benchmark.methods.milp.optimization import OptSolver
 
 
 class MCE(CEGenerator):
@@ -16,7 +17,6 @@ class MCE(CEGenerator):
 
     Attributes:
         _task (Task): The task to solve, inherited from CEGenerator.
-        __customFunc (callable, optional): A custom distance function, inherited from CEGenerator.
         opt (OptSolver): An optimizer instance for setting up and solving the MILP problem.
     """
 
@@ -96,7 +96,17 @@ class MCE(CEGenerator):
                 this_obj_var_l1 >= self.opt.inputNodes[key] - ilist[i]
             )
             obj_vars_l1.append(this_obj_var_l1)
-        self.opt.gurobiModel.setObjective(quicksum(obj_vars_l1), GRB.MINIMIZE)
+        # A category switch costs 1, the maximum |change| over its one-hot group,
+        # as in the APAS authors' set_objective_l1_l0 (optsolver.py:162-174).
+        groups = mutable_groups(self.task.schema)
+        grouped = {index for group in groups for index in group}
+        costs = [var for i, var in enumerate(obj_vars_l1) if i not in grouped]
+        for group in groups:
+            group_cost = self.opt.gurobiModel.addVar(name=f"objl1_group_{group[0]}")
+            for index in group:
+                self.opt.gurobiModel.addConstr(group_cost >= obj_vars_l1[index])
+            costs.append(group_cost)
+        self.opt.gurobiModel.setObjective(quicksum(costs), GRB.MINIMIZE)
         self.opt.gurobiModel.Params.NonConvex = 2
         self.opt.gurobiModel.update()
         self.opt.gurobiModel.optimize()
@@ -108,13 +118,11 @@ class MCE(CEGenerator):
             print("No solution found using MCE!")
             return pd.DataFrame(instance).T
 
-        ce = []
-
-        # Find input variables and final CE
-        for v in self.opt.gurobiModel.getVars():
-            if "v_0_" in v.varName:
-                ce.append(v.getAttr(GRB.Attr.X))
-
-        res = pd.DataFrame(ce).T
+        ce = [
+            self.opt.inputNodes[f"v_0_{i}"].getAttr(GRB.Attr.X)
+            for i in range(len(self.task.training_data.X.columns))
+        ]
+        # The MILP encodes the schema; projection only removes solver tolerance.
+        res = pd.DataFrame([self.task.schema.project(ce, ilist)])
         res.columns = instance.index
         return res

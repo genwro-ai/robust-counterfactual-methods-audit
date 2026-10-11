@@ -1,3 +1,14 @@
+"""Wachter et al. (2017) gradient counterfactuals.
+
+Immutable columns get zero gradient, so Adam leaves them at the factual's
+values. On constrained schemas the search stops once the projected iterate is
+classified as the target, and returns that projected point. Wachter et al.
+handle discrete features outside the gradient step (§IV.A, "Counterfactual
+Hybrid": clamping and separate runs per discrete value), and CARLA's
+``wachter_recourse`` predicts, stops and returns on the reconstructed encoding
+(``reconstruct_encoding_constraints``, catalog/wachter/library/wachter.py).
+"""
+
 import datetime
 
 import pandas as pd
@@ -6,7 +17,11 @@ from torch import nn
 from torch.autograd import Variable
 from torch.optim import Adam
 
-from robustness_benchmark.methods.ce_generator import CEGenerator
+from robustness_benchmark.methods.base import CEGenerator
+from robustness_benchmark.methods.feature_constraints import (
+    search_projection,
+    valid_projection,
+)
 
 
 class CostLoss(nn.Module):
@@ -95,6 +110,10 @@ class Wachter(CEGenerator):
         if y_target == 0 and class_prob < 0.5 or y_target == 1 and class_prob >= 0.5:
             wac_valid = True
 
+        frozen = self.task.schema.immutable_columns()
+        project = search_projection(self.task.schema, instance.to_numpy())
+        projected = None
+
         # set maximum allowed time for computing 1 counterfactual
         t0 = datetime.datetime.now(datetime.UTC)
         t_max = datetime.timedelta(minutes=max_allowed_minutes)
@@ -105,22 +124,32 @@ class Wachter(CEGenerator):
             class_prob = self.task.model.predict_proba_tensor(wac)
             wac_loss = validity_loss(class_prob, y_target) + lamb * cost_loss(x, wac)
             wac_loss.sum().backward()
+            if frozen:
+                wac.grad[frozen] = 0.0
             optimiser.step()
 
             # break conditions
-            p = class_prob[0].item()
-            if (neg_value and p + epsilon < 0.5) or (
-                not neg_value and p - epsilon >= 0.5
-            ):
-                wac_valid = True
+            if project is not None:
+                projected = valid_projection(
+                    self.task.model,
+                    project,
+                    wac.detach().numpy(),
+                    1 - neg_value,
+                    margin=epsilon,
+                )
+                wac_valid = projected is not None
+            else:
+                p = class_prob[0].item()
+                if (neg_value and p + epsilon < 0.5) or (
+                    not neg_value and p - epsilon >= 0.5
+                ):
+                    wac_valid = True
             if datetime.datetime.now(datetime.UTC) - t0 > t_max:
                 break
             iterations += 1
 
+        if projected is not None:
+            return pd.DataFrame([projected], columns=instance.index)
         res = pd.DataFrame(wac.detach().numpy()).T
         res.columns = instance.index
-        # if not self.task.model.predict_single(res.T):
-        #     print("Failed!")
-        #     pd.DataFrame(instance)
-
         return res

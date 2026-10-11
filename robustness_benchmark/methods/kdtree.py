@@ -1,8 +1,15 @@
+"""Nearest-neighbour counterfactuals among target-class training points.
+
+With immutable features, each candidate takes the factual's immutable values
+and is kept only if the model still assigns it the target class, so the
+counterfactual changes mutable features only, as for every other method.
+"""
+
 import numpy as np
 import pandas as pd
 from sklearn.neighbors import KDTree
 
-from robustness_benchmark.methods.ce_generator import CEGenerator
+from robustness_benchmark.methods.base import CEGenerator
 
 
 class KDTreeNNCE(CEGenerator):
@@ -14,7 +21,6 @@ class KDTreeNNCE(CEGenerator):
 
     Attributes:
         _task (Task): The task to solve, inherited from CEGenerator.
-        __customFunc (callable, optional): A custom distance function, inherited from CEGenerator.
     """
 
     def _generation_method(
@@ -24,8 +30,6 @@ class KDTreeNNCE(CEGenerator):
         Generates a counterfactual explanation using KD-Tree for nearest neighbor search.
 
         @param instance: The instance for which to generate a counterfactual.
-        @param distance_func: The function used to calculate the distance between points.
-        @param custom_distance_func: Optional custom distance function. (Not used in this method)
         @param gamma: The distance threshold for convergence. (Not used in this method)
         @param column_name: The name of the target column. (Not used in this method)
         @param neg_value: The value considered negative in the target variable.
@@ -49,6 +53,12 @@ class KDTreeNNCE(CEGenerator):
             positive_instances = positive_instances[idxs_1]
         else:
             positive_instances = positive_instances[idxs_0]
+        if self.task.schema.immutable:
+            positive_instances = self.task.schema.project(
+                positive_instances, instance.to_numpy(dtype=float)
+            )
+            accepted = model.predict(positive_instances).iloc[:, 0].to_numpy() >= 0.5
+            positive_instances = positive_instances[accepted == bool(nnce_y)]
 
         # If there are no positive instances, return None
         if len(positive_instances) == 0:

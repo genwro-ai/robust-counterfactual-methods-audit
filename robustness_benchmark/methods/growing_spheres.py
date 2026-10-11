@@ -1,6 +1,29 @@
+"""Growing spheres (Laugel et al., 2018) as used by BetaRCE and RobX.
+
+Benchmark extension, not CARLA's or Laugel's: Laugel et al. treat every
+feature as continuous, and CARLA's ``growing_spheres_search`` draws each
+binary column Bernoulli(0.5) in every candidate (gs_counterfactuals.py:114).
+Here, with a constrained FeatureSchema the sphere covers the mutable numeric
+columns only, immutable columns keep the instance's values, and each mutable
+categorical feature is redrawn as a whole one-hot group
+(``resample_categories``). A category change counts toward the candidate's
+sampled radius, so its numeric step shrinks to make room and a candidate may
+change categories alone. Candidates are projected (integer rounding) before
+they are scored.
+"""
+
 from collections.abc import Callable
 
 import numpy as np
+import pandas as pd
+
+from robustness_benchmark.core.schema import FeatureSchema
+from robustness_benchmark.methods.feature_constraints import (
+    fit_category_changes_in_radius,
+    is_constrained,
+    mutable_groups,
+    resample_categories,
+)
 
 
 def hyper_sphere_coordinates(
@@ -34,9 +57,11 @@ def growing_spheres_search(
     feature_min: np.ndarray | None = None,
     feature_max: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
+    schema: FeatureSchema | None = None,
 ) -> np.ndarray | None:
     if rng is None:
         rng = np.random.default_rng()
+    constrained = is_constrained(schema)
 
     instance = np.asarray(instance).reshape(1, -1)
     if not np.all(np.isfinite(instance)):
@@ -50,10 +75,15 @@ def growing_spheres_search(
 
     n_features = instance.shape[1]
     binary_indices = sorted(set(binary_indices)) if binary_indices else []
-    binary_mask = np.zeros(n_features, dtype=bool)
+    off_sphere = np.zeros(n_features, dtype=bool)
     if binary_indices:
-        binary_mask[binary_indices] = True
-    continuous_indices = np.where(~binary_mask)[0]
+        off_sphere[binary_indices] = True
+    groups = mutable_groups(schema) if constrained else []
+    if constrained:
+        off_sphere[schema.immutable_columns()] = True
+        for group in schema.one_hot_groups().values():
+            off_sphere[group] = True
+    continuous_indices = np.where(~off_sphere)[0]
 
     low = 0.0
     high = low + step
@@ -61,7 +91,7 @@ def growing_spheres_search(
         candidates = np.repeat(instance, n_search_samples, axis=0)
 
         if continuous_indices.size > 0:
-            cont_samples, _ = hyper_sphere_coordinates(
+            cont_samples, radii = hyper_sphere_coordinates(
                 n_search_samples,
                 instance[:, continuous_indices],
                 high=high,
@@ -70,6 +100,8 @@ def growing_spheres_search(
                 rng=rng,
             )
             candidates[:, continuous_indices] = cont_samples
+        else:
+            radii = rng.random(n_search_samples) * (high - low) + low
 
         if binary_indices:
             candidates[:, binary_indices] = rng.binomial(
@@ -78,8 +110,16 @@ def growing_spheres_search(
                 size=(n_search_samples, len(binary_indices)),
             )
 
+        if groups:
+            resample_categories(candidates, groups, rng)
+            fit_category_changes_in_radius(
+                candidates, instance, groups, continuous_indices, radii, p_norm
+            )
+
         if feature_min is not None and feature_max is not None:
             candidates = np.clip(candidates, feature_min, feature_max)
+        if constrained:
+            candidates = schema.project(candidates, instance)
 
         preds = pred_fn_crisp(candidates)
         mask = preds == target_class
@@ -98,3 +138,66 @@ def growing_spheres_search(
         high = low + step
 
     return None
+
+
+class GrowingSpheresAdapter:
+    """Non-robust growing spheres with BetaRCE's base-search settings.
+
+    A candidate qualifies once the base model gives the target class at least
+    ``target_probability``. At 0.5 this is plain growing spheres; higher values
+    are confidence-margin baselines that trace the robustness-distance frontier
+    a robust method has to beat.
+    """
+
+    def __init__(
+        self,
+        task,
+        *,
+        seed: int,
+        target_probability: float,
+        n_search_samples: int,
+        p_norm: int,
+        step: float,
+        max_iter: int,
+    ) -> None:
+        if not 0.5 <= target_probability < 1.0:
+            raise ValueError("target_probability must lie in [0.5, 1)")
+        self.model = task.model
+        self.schema = task.schema
+        self.target_probability = target_probability
+        self.n_search_samples = n_search_samples
+        self.p_norm = p_norm
+        self.step = step
+        self.max_iter = max_iter
+        self.rng = np.random.default_rng(seed)
+        self.last_metadata: dict[str, object] = {}
+
+    def generate_for_instance(
+        self, factual: pd.Series, *, neg_value: int = 0, **_kwargs: object
+    ) -> pd.DataFrame:
+        target = 1 - neg_value
+
+        def qualifies(values: np.ndarray) -> np.ndarray:
+            probability = self.model.predict(values).iloc[:, 0].to_numpy()
+            if target == 0:
+                probability = 1.0 - probability
+            return (probability >= self.target_probability).astype(int)
+
+        counterfactual = growing_spheres_search(
+            factual.to_numpy(dtype=float),
+            pred_fn_crisp=qualifies,
+            target_class=1,
+            n_search_samples=self.n_search_samples,
+            p_norm=self.p_norm,
+            step=self.step,
+            max_iter=self.max_iter,
+            rng=self.rng,
+            schema=self.schema,
+        )
+        self.last_metadata = {
+            "gs_status": "ok" if counterfactual is not None else "not_found",
+            "gs_target_probability": self.target_probability,
+        }
+        if counterfactual is None:
+            return pd.DataFrame(columns=factual.index)
+        return pd.DataFrame([counterfactual], columns=factual.index)

@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.core.classifiers import MLPClassifier
 from robustness_benchmark.core.provenance import (
     file_sha256,
     load_model_checkpoint,
@@ -20,7 +20,7 @@ def test_frame_dataset_preserves_contract():
 
 
 def test_prediction_and_probability_labels_are_consistent():
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     linear = model.get_torch_model()[0]
     linear.weight.data[:] = 1.0
     linear.bias.data[:] = -1.0
@@ -35,7 +35,7 @@ def test_prediction_and_probability_labels_are_consistent():
 
 
 def test_model_checkpoint_round_trip(tmp_path):
-    model = TorchBinaryModel(input_dim=2, hidden_dim=(3,), seed=12)
+    model = MLPClassifier(input_dim=2, hidden_dim=(3,), seed=12)
     X = pd.DataFrame({"a": [0.0, 1.0], "b": [1.0, 0.0]})
     path = tmp_path / "variant.pt"
 

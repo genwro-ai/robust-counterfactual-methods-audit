@@ -1,3 +1,12 @@
+"""APΔS (Marzari et al., 2024) robust-CFE generation, Algorithm 2.
+
+Aligned with the authors' code (github.com/lmarza/APAS, exp_sec7):
+- n = int(log(1 - alpha) / log(R)) parameter samples, 1,378 at the paper's
+  alpha = 0.999, R = 0.995 (``concretizations`` in credit.ipynb).
+- An infeasible MCE ends the margin search: ``run_ours_one_delta_robust``
+  stops once the solver returns no CFE (util_scripts/utilexp.py:599).
+"""
+
 import math
 from time import perf_counter
 from typing import Protocol
@@ -9,9 +18,9 @@ import torch
 from gurobipy import GRB
 from torch.func import functional_call, vmap
 
+from robustness_benchmark.methods.configuration import APAS_IMPLEMENTATION
 from robustness_benchmark.methods.mce import MCE
 
-APAS_IMPLEMENTATION = "marzari2024_algorithm2_calibrated_radius_holdout_v3"
 _CERTIFICATION_SEED_OFFSET = 1_000_003
 
 
@@ -32,6 +41,10 @@ def _time_limit_status() -> int:
     return int(GRB.TIME_LIMIT)
 
 
+def _infeasible_statuses() -> set[int]:
+    return {int(GRB.INFEASIBLE), int(GRB.INF_OR_UNBD)}
+
+
 def _set_default_solver_limit(seconds: float) -> None:
     gurobipy.setParam("TimeLimit", max(float(seconds), 0.01))
     gurobipy.setParam("OutputFlag", 0)
@@ -42,7 +55,7 @@ def _reset_default_solver_limit() -> None:
 
 
 class APASAdapter:
-    """Generate CEs with APDeltaS search and an independent final certificate.
+    """Generate CEs with APΔS search and an independent final certificate.
 
     This implements the paper's robust-CFE generation pattern in Algorithm 2
     at a fixed, externally calibrated parameter radius. It starts with a
@@ -59,20 +72,20 @@ class APASAdapter:
         *,
         seed: int,
         delta: float,
-        confidence: float = 0.999,
-        robustness_probability: float = 0.995,
-        initial_margin: float = 0.01,
-        increment: float = 0.2,
-        maximum_margin: float = 20.0,
-        wall_time_seconds: float = 30.0,
+        confidence: float,
+        robustness_probability: float,
+        initial_margin: float,
+        increment: float,
+        maximum_margin: float,
+        wall_time_seconds: float,
         mce: _MCEProtocol | None = None,
     ) -> None:
         if delta <= 0:
             raise ValueError("delta must be positive")
         if not 0 < confidence < 1 or not 0 < robustness_probability < 1:
-            raise ValueError("APDeltaS confidence and probability must be in (0, 1)")
+            raise ValueError("APΔS confidence and probability must be in (0, 1)")
         if increment <= 0 or maximum_margin < initial_margin:
-            raise ValueError("invalid APDeltaS margin schedule")
+            raise ValueError("invalid APΔS margin schedule")
         if wall_time_seconds <= 0:
             raise ValueError("wall_time_seconds must be positive")
 
@@ -84,7 +97,7 @@ class APASAdapter:
         self.delta = delta
         self.confidence = confidence
         self.robustness_probability = robustness_probability
-        self.number_of_samples = math.ceil(
+        self.number_of_samples = int(
             math.log(1 - confidence) / math.log(robustness_probability)
         )
         self.initial_margin = initial_margin
@@ -201,7 +214,7 @@ class APASAdapter:
         self, factual: pd.Series, *, neg_value: int = 0, **_kwargs: object
     ) -> pd.DataFrame:
         if neg_value != 0:
-            raise ValueError("The APDeltaS adapter currently supports target class 1")
+            raise ValueError("The APΔS adapter currently supports target class 1")
         desired_output = 1
         instance_index = self._instance_index
         self._instance_index += 1
@@ -236,6 +249,14 @@ class APASAdapter:
                 ):
                     self.last_metadata = self._metadata(
                         outcome="timeout",
+                        certified=False,
+                        iterations=iterations,
+                        margin=margin,
+                    )
+                    return pd.DataFrame(columns=factual.index)
+                if _solver_status(self.mce) in _infeasible_statuses():
+                    self.last_metadata = self._metadata(
+                        outcome="infeasible",
                         certified=False,
                         iterations=iterations,
                         margin=margin,

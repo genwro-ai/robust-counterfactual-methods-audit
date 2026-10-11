@@ -4,26 +4,31 @@ from pathlib import Path
 
 import pandas as pd
 
+from robustness_benchmark.benchmark.run import run_method
+from robustness_benchmark.benchmark.store import write_run
 from robustness_benchmark.core.data import load_dataset
-from robustness_benchmark.core.model_bank import (
-    load_model_bank,
-    model_bank_fingerprint,
-    select_factuals,
+from robustness_benchmark.core.factuals import select_factuals
+from robustness_benchmark.core.model_bank import load_model_bank, model_bank_fingerprint
+from robustness_benchmark.core.model_changes import (
+    behavioral_distance,
+    parameter_linf_distance,
 )
+from robustness_benchmark.core.protocol import EVALUATION_FACTUALS_SEED_OFFSET
 from robustness_benchmark.core.provenance import load_model_checkpoint, write_json
-from robustness_benchmark.core.training import parameter_linf_distance
-from robustness_benchmark.evaluation.aggregate import aggregate_survival, generation_metrics
-from robustness_benchmark.evaluation.metrics import behavioral_distance, evaluate_survival
-from robustness_benchmark.evaluation.summaries import (
-    apas_generation_summary,
-    seed_family_survival_summary,
+from robustness_benchmark.evaluation.aggregate import (
+    family_survival_summary,
+    generation_metrics,
+    generation_summary,
 )
-from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION
-from robustness_benchmark.methods.apas_calibration import stable_hash
-from robustness_benchmark.methods.configuration import LOCKED_CONFIGS
-from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
+from robustness_benchmark.methods.calibration import stable_hash
+from robustness_benchmark.methods.configuration import (
+    APAS_IMPLEMENTATION,
+    LOCKED_CONFIGS,
+)
+from robustness_benchmark.methods.registry import make_task
 
 PROTOCOL_VERSION = "apas_betarce_pool_diagnostic_v1"
+METHOD_LABEL = "apas_betarce_pool"
 
 
 def parse_args() -> argparse.Namespace:
@@ -64,7 +69,7 @@ def _pool_calibration(
                 "path": str(path.resolve()),
                 "model_id": payload["model_id"],
                 "parameter_linf_distance": distance,
-                **behavioral_distance(base_model, model, data.X_test),
+                **behavioral_distance(base_model, model, data.X_val),
             }
         )
     selected_delta = max(float(row["parameter_linf_distance"]) for row in records)
@@ -112,13 +117,15 @@ def _write_summary(output: Path, calibration: list[dict[str, object]]) -> None:
         output / "summary.json",
         {
             "protocol_version": PROTOCOL_VERSION,
-            "method": "apas_betarce_pool",
+            "method": METHOD_LABEL,
             "implementation": APAS_IMPLEMENTATION,
             "diagnostic_only": True,
             "calibration": calibration,
-            "generation_by_seed": apas_generation_summary(generation),
-            "survival_by_seed_and_family": seed_family_survival_summary(survival),
-            "survival_by_family": aggregate_survival(survival),
+            "generation_by_seed": generation_summary(generation, by=("base_model_id",)),
+            "survival_by_seed_and_family": family_survival_summary(
+                survival, by=("base_model_id", "change_family")
+            ),
+            "survival_by_family": family_survival_summary(survival),
         },
     )
 
@@ -137,7 +144,7 @@ def main() -> None:
         raise ValueError(f"Base seeds are not in the model bank: {unknown_seeds}")
     data = load_dataset(
         str(manifest["dataset"]),
-        seed=int(manifest.get("split_seed", 2026)),
+        seed=int(manifest["split_seed"]),
         split_version=str(manifest["split_version"]),
     )
 
@@ -158,7 +165,9 @@ def main() -> None:
         method_config = {
             **LOCKED_CONFIGS["apas"],
             "delta": selected_delta,
-            "delta_selection": "max_linf_over_10_betarce_bootstrap_models",
+            "delta_selection": (
+                f"max_linf_over_{args.pool_members}_betarce_bootstrap_models"
+            ),
             "calibration_fingerprint": calibration["calibration_fingerprint"],
             "calibration_protocol_version": PROTOCOL_VERSION,
         }
@@ -166,57 +175,44 @@ def main() -> None:
             base_model,
             data.X_test,
             args.n_factuals,
-            seed=base_seed + 30_000,
+            seed=base_seed + EVALUATION_FACTUALS_SEED_OFFSET,
         )
-        task = make_task(base_model, data.X_train, data.y_train, seed=base_seed)
-        counterfactuals, generation = generate_counterfactuals(
+        task = make_task(
+            base_model,
+            data.X_train,
+            data.y_train,
+            seed=base_seed,
+            schema=data.feature_schema,
+        )
+        run = run_method(
             "apas",
-            task,
-            factuals,
+            task=task,
+            factuals=factuals,
             factual_ids=factual_ids,
             dataset_row_ids=row_ids,
+            changes=changes,
+            base_model_id=base_model_id,
+            X_reference=data.X_test,
+            y_reference=data.y_test,
             method_config=method_config,
+            provenance={
+                "benchmark_protocol_version": PROTOCOL_VERSION,
+                "bank_fingerprint": bank_fingerprint,
+            },
             progress_description=(
                 f"{data.name} · seed {base_seed} · APAS-BetaPool δ={selected_delta:.4g}"
             ),
         )
-        serialized_config = json.dumps(method_config, sort_keys=True)
-        for row in generation:
-            row["method"] = "apas_betarce_pool"
-            row["base_model_id"] = base_model_id
-            row["method_config"] = serialized_config
-            row["benchmark_protocol_version"] = PROTOCOL_VERSION
-            row["bank_fingerprint"] = bank_fingerprint
-        survival = evaluate_survival(
-            "apas_betarce_pool",
-            factuals,
-            counterfactuals,
-            changes,
-            base_model,
-            data.X_test,
-            data.y_test,
-            [bool(row["base_valid"]) for row in generation],
-            factual_ids,
-            row_ids,
-            base_model_id,
-        )
-        for row in survival:
-            row["method_config"] = serialized_config
-            row["benchmark_protocol_version"] = PROTOCOL_VERSION
-            row["bank_fingerprint"] = bank_fingerprint
-        run_dir = args.output / "runs" / f"seed_{base_seed}"
-        run_dir.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(generation).to_parquet(run_dir / "generation.parquet", index=False)
-        pd.DataFrame(survival).to_parquet(run_dir / "survival.parquet", index=False)
-        counterfactuals.to_parquet(run_dir / "counterfactuals.parquet", index=False)
-        factuals.to_parquet(run_dir / "factuals.parquet", index=False)
+        for row in (*run.generation, *run.survival):
+            row["method"] = METHOD_LABEL
+        write_run(args.output / "runs" / f"seed_{base_seed}", run, factuals)
         print(
             json.dumps(
                 {
                     "dataset": data.name,
                     "base_seed": base_seed,
                     "apas_delta": selected_delta,
-                    **generation_metrics(pd.DataFrame(generation)),
+                    **generation_metrics(pd.DataFrame(run.generation)),
                 }
             ),
             flush=True,

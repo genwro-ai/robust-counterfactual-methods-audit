@@ -1,9 +1,20 @@
+"""MILP encoding of an (interval-abstracted) ReLU network for Gurobi.
+
+With free inputs (MCE inside APΔS), the FeatureSchema is encoded exactly:
+immutable inputs are fixed to the instance, each mutable one-hot group is a
+set of binary variables summing to 1, and each integer feature is an integer
+variable in raw units linked to its standardized input. Fixed inputs (RNCE's
+robustness check of training points) are valid encodings already.
+"""
+
 import pandas as pd
 from gurobipy import GRB, Model
 from gurobipy.gurobipy import quicksum
 
 from robustness_benchmark.core.task import ClassificationTask
-from robustness_benchmark.methods.interval_abstraction import IntervalAbstractionPytorch
+from robustness_benchmark.methods.milp.interval_abstraction import (
+    IntervalAbstractionPytorch,
+)
 
 
 class OptSolver:
@@ -89,6 +100,10 @@ class OptSolver:
                 )
 
         else:
+            schema = self.task.schema
+            immutable = set(schema.immutable_columns())
+            one_hot = {i for group in schema.one_hot_groups().values() for i in group}
+            integer = dict(zip(schema.indices(schema.integer), schema.integer))
             # Create the Gurobi variables for the inputs
             for i, col in enumerate(self.task.training_data.X.columns):
                 key = f"v_0_{i}"
@@ -98,10 +113,24 @@ class OptSolver:
                 col_max = self.task.training_data.X[col].max()
 
                 # Use the calculated min and max for the bounds of the variable
+                if i in immutable:
+                    col_min = col_max = ilist[i]
                 self.inputNodes[key] = self.gurobiModel.addVar(
-                    lb=col_min, ub=col_max, name=key
+                    lb=col_min,
+                    ub=col_max,
+                    vtype=GRB.BINARY if i in one_hot - immutable else GRB.CONTINUOUS,
+                    name=key,
                 )
                 all_nodes[key] = self.inputNodes[key]
+                if i in integer and i not in immutable:
+                    mean, scale = schema.numeric_scale[integer[i]]
+                    raw = self.gurobiModel.addVar(
+                        lb=round(float(col_min) * scale + mean),
+                        ub=round(float(col_max) * scale + mean),
+                        vtype=GRB.INTEGER,
+                        name=f"raw_{i}",
+                    )
+                    self.gurobiModel.addConstr(raw == mean + scale * all_nodes[key])
 
                 if delta > 0:
                     max_magnitude = max(abs(float(col_min)), abs(float(col_max)))
@@ -114,7 +143,61 @@ class OptSolver:
                     self.gurobiModel.addConstr(magnitude >= -all_nodes[key])
                     input_magnitudes[key] = magnitude
 
+            for feature, group in schema.one_hot_groups().items():
+                if feature not in schema.immutable:
+                    self.gurobiModel.addConstr(
+                        quicksum(self.inputNodes[f"v_0_{i}"] for i in group) == 1,
+                        name=f"one_hot_{feature}",
+                    )
+
         self.gurobiModel.update()
+
+        def interval_affine(layer, node):
+            """Return upper and lower affine bounds of a pre-activation.
+
+            First-layer inputs can be negative, so their weight intervals are
+            sign-aware; later layers read nonnegative ReLU outputs.
+            """
+
+            keys = [
+                f"weight_l{layer}_n{prev_node_index}_to_l{layer + 1}_n{node}"
+                for prev_node_index in range(intabs.layers[layer])
+            ]
+            previous_nodes = [
+                all_nodes[f"v_{layer}_{prev_node_index}"]
+                for prev_node_index in range(intabs.layers[layer])
+            ]
+            if layer == 0 and delta > 0:
+                upper_terms = []
+                lower_terms = []
+                for prev_node_index, (key, previous_node) in enumerate(
+                    zip(keys, previous_nodes, strict=True)
+                ):
+                    weight_interval = intabs.weight_intervals[key]
+                    nominal_weight = sum(weight_interval) / 2
+                    weight_radius = (weight_interval[1] - weight_interval[0]) / 2
+                    magnitude = (
+                        abs(ilist[prev_node_index])
+                        if fix_inputs
+                        else input_magnitudes[f"v_0_{prev_node_index}"]
+                    )
+                    upper_terms.append(
+                        nominal_weight * previous_node + weight_radius * magnitude
+                    )
+                    lower_terms.append(
+                        nominal_weight * previous_node - weight_radius * magnitude
+                    )
+                return quicksum(upper_terms), quicksum(lower_terms)
+            return (
+                quicksum(
+                    intabs.weight_intervals[key][1] * previous_node
+                    for key, previous_node in zip(keys, previous_nodes, strict=True)
+                ),
+                quicksum(
+                    intabs.weight_intervals[key][0] * previous_node
+                    for key, previous_node in zip(keys, previous_nodes, strict=True)
+                ),
+            )
 
         num_layers = len(intabs.layers)
 
@@ -145,44 +228,7 @@ class OptSolver:
                     name="constr2_" + var_name,
                 )
 
-                if layer == 0 and delta > 0:
-                    upper_terms = []
-                    lower_terms = []
-                    for prev_node_index in range(intabs.layers[layer]):
-                        weight_interval = intabs.weight_intervals[
-                            f"weight_l{layer}_n{prev_node_index}_to_l{layer + 1}_n{node}"
-                        ]
-                        nominal_weight = sum(weight_interval) / 2
-                        weight_radius = (weight_interval[1] - weight_interval[0]) / 2
-                        previous_node = all_nodes[f"v_{layer}_{prev_node_index}"]
-                        magnitude = (
-                            abs(ilist[prev_node_index])
-                            if fix_inputs
-                            else input_magnitudes[f"v_0_{prev_node_index}"]
-                        )
-                        upper_terms.append(
-                            nominal_weight * previous_node + weight_radius * magnitude
-                        )
-                        lower_terms.append(
-                            nominal_weight * previous_node - weight_radius * magnitude
-                        )
-                    upper_affine = quicksum(upper_terms)
-                    lower_affine = quicksum(lower_terms)
-                else:
-                    upper_affine = quicksum(
-                        intabs.weight_intervals[
-                            f"weight_l{layer}_n{prev_node_index}_to_l{layer + 1}_n{node}"
-                        ][1]
-                        * all_nodes[f"v_{layer}_{prev_node_index}"]
-                        for prev_node_index in range(intabs.layers[layer])
-                    )
-                    lower_affine = quicksum(
-                        intabs.weight_intervals[
-                            f"weight_l{layer}_n{prev_node_index}_to_l{layer + 1}_n{node}"
-                        ][0]
-                        * all_nodes[f"v_{layer}_{prev_node_index}"]
-                        for prev_node_index in range(intabs.layers[layer])
-                    )
+                upper_affine, lower_affine = interval_affine(layer, node)
 
                 # 3) Add the upper interval constraint and the inactive ReLU term.
                 self.gurobiModel.addConstr(
@@ -208,30 +254,19 @@ class OptSolver:
             lb=-float("inf"), vtype=GRB.CONTINUOUS, name="output_node"
         )
 
+        # Without hidden layers the output layer reads the inputs directly.
+        output_upper, output_lower = interval_affine(num_layers - 2, 0)
+
         # Constraint 1: node <= ub(W)x + ub(B)
         self.gurobiModel.addConstr(
-            quicksum(
-                intabs.weight_intervals[
-                    f"weight_l{num_layers - 2}_n{prev_node_index}_to_l{num_layers - 1}_n{0}"
-                ][1]
-                * all_nodes[f"v_{num_layers - 2}_{prev_node_index}"]
-                for prev_node_index in range(intabs.layers[num_layers - 2])
-            )
-            + intabs.bias_intervals[f"bias_into_l{num_layers - 1}_n{0}"][1]
+            output_upper + intabs.bias_intervals[f"bias_into_l{num_layers - 1}_n{0}"][1]
             >= self.outputNode,
             name="output_node_C1",
         )
 
         # Constraint 2: node => lb(W)x + lb(B)
         self.gurobiModel.addConstr(
-            quicksum(
-                intabs.weight_intervals[
-                    f"weight_l{num_layers - 2}_n{prev_node_index}_to_l{num_layers - 1}_n{0}"
-                ][0]
-                * all_nodes[f"v_{num_layers - 2}_{prev_node_index}"]
-                for prev_node_index in range(intabs.layers[num_layers - 2])
-            )
-            + intabs.bias_intervals[f"bias_into_l{num_layers - 1}_n{0}"][0]
+            output_lower + intabs.bias_intervals[f"bias_into_l{num_layers - 1}_n{0}"][0]
             <= self.outputNode,
             name="output_node_C2",
         )
