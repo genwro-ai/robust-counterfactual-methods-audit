@@ -233,7 +233,7 @@ def test_apas_configuration_is_explicit():
     )
 
     assert kwargs == {}
-    assert generator.number_of_samples == 1_379
+    assert generator.number_of_samples == 1_378
     assert generator.delta == 0.0123
 
 

@@ -42,7 +42,7 @@ def test_apas_sample_count_and_successful_generation(monkeypatch):
     )
     result = generator.generate_for_instance(X.iloc[0])
 
-    assert generator.number_of_samples == 22
+    assert generator.number_of_samples == 21
     assert not result.empty
     assert mce.margins == [0.01]
     assert generator.last_metadata["method_certified"] is True
@@ -67,7 +67,7 @@ def test_apas_parameter_samples_are_reused():
     second = generator._parameter_concretizations()
 
     assert first is second
-    assert all(value.shape[0] == 22 for value in first.values())
+    assert all(value.shape[0] == 21 for value in first.values())
 
 
 def test_apas_confirmation_uses_an_independent_parameter_sample():

@@ -1,3 +1,12 @@
+"""APDeltaS (Marzari et al., 2024) robust-CFE generation, Algorithm 2.
+
+Aligned with the authors' code (github.com/lmarza/APAS, exp_sec7):
+- n = int(log(1 - alpha) / log(R)) parameter samples, 1,378 at the paper's
+  alpha = 0.999, R = 0.995 (``concretizations`` in credit.ipynb).
+- An infeasible MCE ends the margin search: ``run_ours_one_delta_robust``
+  stops once the solver returns no CFE (util_scripts/utilexp.py:599).
+"""
+
 import math
 from time import perf_counter
 from typing import Protocol
@@ -11,7 +20,7 @@ from torch.func import functional_call, vmap
 
 from robustness_benchmark.methods.mce import MCE
 
-APAS_IMPLEMENTATION = "marzari2024_algorithm2_calibrated_radius_holdout_v3"
+APAS_IMPLEMENTATION = "marzari2024_algorithm2_calibrated_radius_holdout_v4"
 _CERTIFICATION_SEED_OFFSET = 1_000_003
 
 
@@ -30,6 +39,10 @@ def _solver_status(component: object) -> int | None:
 
 def _time_limit_status() -> int:
     return int(GRB.TIME_LIMIT)
+
+
+def _infeasible_statuses() -> set[int]:
+    return {int(GRB.INFEASIBLE), int(GRB.INF_OR_UNBD)}
 
 
 def _set_default_solver_limit(seconds: float) -> None:
@@ -84,7 +97,7 @@ class APASAdapter:
         self.delta = delta
         self.confidence = confidence
         self.robustness_probability = robustness_probability
-        self.number_of_samples = math.ceil(
+        self.number_of_samples = int(
             math.log(1 - confidence) / math.log(robustness_probability)
         )
         self.initial_margin = initial_margin
@@ -236,6 +249,14 @@ class APASAdapter:
                 ):
                     self.last_metadata = self._metadata(
                         outcome="timeout",
+                        certified=False,
+                        iterations=iterations,
+                        margin=margin,
+                    )
+                    return pd.DataFrame(columns=factual.index)
+                if _solver_status(self.mce) in _infeasible_statuses():
+                    self.last_metadata = self._metadata(
+                        outcome="infeasible",
                         certified=False,
                         iterations=iterations,
                         margin=margin,

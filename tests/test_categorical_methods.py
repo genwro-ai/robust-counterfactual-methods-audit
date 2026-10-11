@@ -119,16 +119,15 @@ FAST_CONFIGS = {
 # encoding; Wachter returns one only once its projection is valid.
 VALID_BEFORE_PROJECTION = {
     "kdtree",
-    "rnce",
     "apas",
     "betarce",
     "growing_spheres",
     "gs_margin_80",
 }
 # Faithful to their original code, these search one-hot and integer columns as
-# continuous and return the relaxed point; only the registry's projection makes
-# their output valid. The gradient ones among them still freeze immutables.
-RELAXED_SEARCH = {"robx", "trex", "roar_lime", "rbr"}
+# continuous (RNCE in its line search) and return the relaxed point; only the
+# registry's projection makes their output valid. All but RobX keep immutables.
+RELAXED_SEARCH = {"robx", "trex", "roar_lime", "rbr", "rnce"}
 RELAXED_IMMUTABLES = {"robx"}
 
 
@@ -190,8 +189,9 @@ def test_mlp_methods_return_valid_encodings(monkeypatch, mixed_setting, method):
         if row["base_valid"] and method not in RELAXED_SEARCH:
             # Validity was judged on the returned point, not on a relaxed one.
             assert row["projection_changed"] is False
-    if method in RELAXED_SEARCH:
+    if method in RELAXED_SEARCH - {"rnce"}:
         # The method returns its relaxed point; only the registry projects it.
+        # (RNCE's line points here happen to keep the job and whole years.)
         assert any(row["projection_changed"] for row in rows)
     if method in RELAXED_IMMUTABLES:
         return
@@ -255,7 +255,13 @@ def test_wachter_judges_validity_after_rounding():
     assert counterfactuals.iloc[0, 0] >= 11.0
 
 
-def test_milp_encodes_groups_immutables_and_integers():
+def milp_solution(job_c_weight: float) -> tuple[np.ndarray, TorchBinaryModel]:
+    """MCE's own solution for logit = relu(age + 10 hours + w job_c + 5) - 6.
+
+    The factual (age 0, hours 0, job a) has logit -1. Hours is immutable, age
+    an integer in steps of 0.1 (scale 10 years), job a mutable category.
+    """
+
     schema = FeatureSchema(
         columns=("age", "hours", "job_a", "job_b", "job_c"),
         categorical={"job": ("job_a", "job_b", "job_c")},
@@ -263,13 +269,10 @@ def test_milp_encodes_groups_immutables_and_integers():
         integer=("age",),
         immutable=("hours",),
     )
-    # logit = relu(age + 10 hours + 3 job_c + 5) - 6. Unconstrained, the
-    # cheapest L1 fixes are hours +0.1 (immutable) or job_c +0.33 (not one-hot);
-    # the valid optimum is age +1.1, i.e. 11 whole years (a job change costs 2).
     model = TorchBinaryModel(input_dim=5, hidden_dim=(1,), seed=0)
     network = model.get_torch_model()
     with torch.no_grad():
-        network[0].weight.copy_(torch.tensor([[1.0, 10.0, 0.0, 0.0, 3.0]]))
+        network[0].weight.copy_(torch.tensor([[1.0, 10.0, 0.0, 0.0, job_c_weight]]))
         network[0].bias.fill_(5.0)
         network[2].weight.fill_(1.0)
         network[2].bias.fill_(-6.0)
@@ -284,8 +287,16 @@ def test_milp_encodes_groups_immutables_and_integers():
 
     mce.generate_for_instance(factual, neg_value=0)
 
+    # The solver's own values, not the projected output.
     solution = np.array([mce.opt.inputNodes[f"v_0_{i}"].X for i in range(5)])
-    # The solver's own values, not the projected output, satisfy the schema.
+    return solution, model
+
+
+def test_milp_encodes_groups_immutables_and_integers():
+    # Unconstrained, the cheapest L1 fix is hours +0.1 (immutable); job c alone
+    # is not enough, so the valid optimum is age +1.1, i.e. 11 whole years.
+    solution, model = milp_solution(job_c_weight=0.5)
+
     np.testing.assert_allclose(solution, [1.1, 0.0, 1.0, 0.0, 0.0], atol=1e-6)
     assert model.predict_single(solution) == 1
 

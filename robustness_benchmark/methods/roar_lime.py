@@ -20,6 +20,8 @@ from sklearn.linear_model import LogisticRegression
 
 ROAR_LIME_IMPLEMENTATION = "upadhyay2021_box_logistic_lime_v3"
 LIME_PARAMETER_DECIMALS = 4
+# The default of LIME's explain_instance, which AI4LIFE's lime_explanation uses.
+LIME_NUM_SAMPLES = 5_000
 
 
 def _as_scalar(value: Any) -> float:
@@ -77,7 +79,14 @@ def input_space_parameters(
     scale: np.ndarray,
     mean: np.ndarray,
 ) -> tuple[np.ndarray, float]:
-    """Convert LIME's standardized linear model to the task input coordinates."""
+    """Convert LIME's standardized linear model to the task input coordinates.
+
+    LIME fits its surrogate on features scaled by the training mean and std
+    (``explainer.scaler``) and reports coefficients in those units. AI4LIFE's
+    ``lime_explanation`` feeds them to ROAR unconverted, which matches the
+    model only on data that is already standardized; converting keeps ROAR's
+    objective in the coordinates it optimizes over.
+    """
 
     coefficients = scaled_coefficients / scale
     intercept = scaled_intercept - float(np.sum(scaled_coefficients * mean / scale))
@@ -174,7 +183,7 @@ class RoarLimeAdapter:
         task: Any,
         *,
         seed: int,
-        num_samples: int = 20_000,
+        num_samples: int = LIME_NUM_SAMPLES,
         delta: float = 0.1,
         lambda_param: float = 0.01,
         learning_rate: float = 0.001,

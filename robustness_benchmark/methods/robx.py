@@ -5,9 +5,14 @@ Gaussian stability test treat every encoded column, one-hot and immutable ones
 included, as continuous. Only the start counterfactual comes from the
 benchmark's shared growing spheres, which respects the feature schema; the
 registry projects the returned point before checking validity, like every
-method's. One fix to the reference code: stability is measured for a point's
-own class, so an iterate is accepted only if the model also assigns it the
-counterfactual's class.
+method's.
+
+Each of the c chains moves towards its conservative counterfactual until it
+passes the stability test, and the passing point closest to the factual is
+returned, as in the paper's Algorithm 1; BetaRCE's ``robx_algorithm`` returns
+the first point to pass. One fix to the reference code: stability is measured
+for a point's own class, so an iterate is accepted only if the model also
+assigns it the counterfactual's class.
 """
 
 from collections.abc import Callable
@@ -242,7 +247,14 @@ def robx_algorithm(
     robx_lambda: float = 0.1,
     gamma: float = 0.5,
     rng: np.random.Generator | None = None,
+    *,
+    factual: np.ndarray,
+    p_norm: int = 2,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Algorithm 1: the stable chain point closest to ``factual`` in ``p_norm``.
+
+    A chain that does not pass within ``robx_max_iter`` steps is dropped.
+    """
     if rng is None:
         rng = np.random.default_rng()
 
@@ -273,25 +285,33 @@ def robx_algorithm(
 
     target_side = predict_class_proba_fn(start_counterfactual.reshape(1, -1))[0] > gamma
     counterfactuals = np.tile(start_counterfactual, (len(conservative_cfs), 1))
+    stable = np.zeros(len(conservative_cfs), dtype=bool)
     for _ in range(robx_max_iter):
-        counterfactuals = (
-            robx_lambda * conservative_cfs + (1.0 - robx_lambda) * counterfactuals
+        moving = ~stable
+        counterfactuals[moving] = (
+            robx_lambda * conservative_cfs[moving]
+            + (1.0 - robx_lambda) * counterfactuals[moving]
         )
         stabilities = _counterfactual_stability_batch(
-            counterfactuals,
+            counterfactuals[moving],
             predict_class_proba_fn,
             variance,
             N,
             gamma,
             rng,
         )
-        stable_mask = (stabilities > tau) & (
-            (predict_class_proba_fn(counterfactuals) > gamma) == target_side
+        stable[moving] = (stabilities > tau) & (
+            (predict_class_proba_fn(counterfactuals[moving]) > gamma) == target_side
         )
-        if np.any(stable_mask):
-            return counterfactuals[np.argmax(stable_mask)], conservative_cfs
-
-    return None, None
+        if stable.all():
+            break
+    if not stable.any():
+        return None, None
+    candidates = counterfactuals[stable]
+    distances = np.linalg.norm(
+        candidates - np.asarray(factual).reshape(1, -1), ord=p_norm, axis=1
+    )
+    return candidates[np.argmin(distances)], conservative_cfs
 
 
 @dataclass
@@ -383,6 +403,8 @@ class RobX:
             robx_lambda=robx_lambda,
             gamma=gamma,
             rng=rng,
+            factual=start_instance,
+            p_norm=gs_p_norm,
         )
 
         status = "ok" if robust_cf is not None else "no_robust_cf"
