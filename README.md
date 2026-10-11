@@ -240,11 +240,17 @@ The packet also writes:
 - A robustness-versus-plausibility figure per model class
   (`paper_robustness_plausibility_<model_type>`).
 - Rank tests: a Friedman test with Nemenyi critical-difference diagrams
-  (Demšar 2006) for empirical robustness, end-to-end robustness, and distance,
-  per model class and across the methods that run on all three. Blocks in
-  which a compared method is missing are dropped and counted, and the
-  confidence-margin baselines are excluded. Results are in `rank_tests.csv`
-  and `critical_difference_<metric>_<scope>.pdf`.
+  (Demšar 2006) for empirical robustness, end-to-end robustness, and distance.
+  Datasets are the blocks, because change families within a dataset share
+  base models and counterfactuals. There are three analyses:
+  - main: per model class, each method's score averaged over change families
+  - per family: per model class and change family, for the appendix
+  - cross-class: blocks are dataset × model class, over the methods that run
+    on all three; descriptive, since datasets are shared
+
+  Blocks in which a compared method is missing are dropped and counted, and the
+  confidence-margin baselines are excluded. Results are in `rank_tests.csv` and
+  `critical_difference_<metric>_<scope>[_<family>].pdf`.
 
 ## Metrics
 
@@ -310,11 +316,6 @@ Repository (CC BY 4.0; provenance and SHA-256 in `THIRD_PARTY_NOTICES.md`):
 - Immutable features follow CARLA, MACE, and Ustun et al. (2019): age,
   sex/personal status, race, nationality (native country, foreign worker), and
   marital status (marital status and relationship on Adult).
-
-`python -m robustness_benchmark.cli.german_correction_diff` compares Statlog
-German Credit with South German Credit. After aligning rows on duration,
-amount, and age, 53 of 1,000 rows differ in stored values (amount, age, other
-installment plans, housing, foreign worker), and no labels differ.
 
 ## Optional commands
 

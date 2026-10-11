@@ -2,8 +2,7 @@
 
 Sub-project 1 of the full-paper extension of *Robust to Which Model Change?*
 (arXiv 2609.30918). Later sub-projects (separate specs): categorical/immutable
-features with German Credit, Adult and Taiwan Default (plus the ROAR-style
-German data-correction shift); T:Rex and a confidence-margin baseline;
+features with German Credit, Adult and Taiwan Default; T:Rex and a confidence-margin baseline;
 plausibility and sparsity metrics; statistical rank tests.
 
 ## Goal

@@ -39,10 +39,6 @@ all-numeric, all-mutable one, so existing results are unchanged.
     choice documented.
 - The split protocol (50/10/10/30) and the label contract (0 = adverse) are
   unchanged.
-- Data-correction shift: the Statlog release (UCI 144) and South German differ
-  in stored values in 53 of 1,000 rows, with no label changes. Too light for a
-  change family of its own; it is reported in the paper as a real-world
-  correction (`cli/german_correction_diff.py`).
 
 ## Methods with categorical features (agent 2)
 
@@ -70,8 +66,11 @@ all-numeric, all-mutable one, so existing results are unchanged.
 
 - Friedman test with Nemenyi critical-difference diagrams for empirical
   robustness, end-to-end robustness and distance.
-- Blocks are (dataset × change family) cells. Analyses run per model class over
-  the methods that class supports, plus one cross-class analysis over the
-  methods that run on all three.
+- Datasets are the blocks: change families within a dataset share base models
+  and counterfactuals, so they are not independent. There are three analyses:
+  - main, per model class: each method's score averaged over change families
+  - per change family and model class, for the appendix
+  - cross-class: dataset × model class blocks over the methods that run on all
+    three; descriptive, since datasets are shared
 - Results packet: plausibility and sparsity in tables and figures, a cross-class
   summary table, and labels for the new datasets.

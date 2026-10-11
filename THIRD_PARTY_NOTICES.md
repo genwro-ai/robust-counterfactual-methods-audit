@@ -89,17 +89,6 @@ University of Applied Sciences Berlin. Source archive:
 CSV with the English column names of the archive's `read_SouthGermanCredit.R`.
 
 SHA-256 `a4e28e9ca9e250ca619b052f73bf63c1f4ab9c8e883a2b944f68251ed55a02f3`
-
-### Statlog German Credit (`data/german_statlog.data`)
-
-Hofmann, H. (1994). Statlog (German Credit Data) [Dataset]. UCI Machine
-Learning Repository. <https://doi.org/10.24432/C5NC77>. Source archive:
-<https://archive.ics.uci.edu/static/public/144/statlog+german+credit+data.zip>
-(`german.data`, stored unchanged). Used only by
-`robustness_benchmark/cli/german_correction_diff.py`.
-
-SHA-256 `b21f3d81db8071257d5ff1deaeba1fd4303b62712e6fcc9715c7a86202cb5871`
-
 ### Adult (`data/adult.csv`)
 
 Becker, B. and Kohavi, R. (1996). Adult [Dataset]. UCI Machine Learning

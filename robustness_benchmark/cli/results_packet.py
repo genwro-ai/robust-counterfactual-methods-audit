@@ -172,7 +172,7 @@ SCOPE_LABELS = {**MODEL_TYPES, CROSS_CLASS: "Cross-class"}
 
 @dataclass(frozen=True)
 class RankAnalysis:
-    """One rank-test metric; family-level metrics use dataset x family blocks."""
+    """One rank-test metric; ``by_family`` metrics also get per-family analyses."""
 
     name: str
     label: str
@@ -703,45 +703,74 @@ def rank_test_methods(overall: pd.DataFrame, model_types: list[str]) -> list[str
     return ordered(set.intersection(*runs).difference(MARGIN_BASELINES), METHOD_ORDER)
 
 
+RankKey = tuple[str, str, str]  # (analysis, scope, change family or ALL_FAMILIES)
+ALL_FAMILIES = "all"
+
+
 def run_rank_tests(
     overall: pd.DataFrame, family: pd.DataFrame
-) -> dict[tuple[str, str], RankTestResult]:
-    """Rank tests per analysis, for each model type and across all of them.
+) -> dict[RankKey, RankTestResult]:
+    """Rank tests with datasets as the independent blocks.
 
-    Blocks are dataset x change family (dataset alone for distance, which has no
-    family-level value) and, in the cross-class scope, also model type. Analyses
-    without enough methods or complete blocks are left out.
+    Families within a dataset share base models and counterfactuals, so they
+    are not independent blocks (Demšar 2006). Three analyses:
+    - main, per model type: each method's score averaged over change families;
+    - per change family and model type (appendix);
+    - cross-class: blocks are dataset x model type. Datasets are shared, so this
+      one is descriptive.
+    Analyses without enough methods or complete blocks are left out.
     """
 
     model_types = ordered(overall["model_type"], tuple(MODEL_TYPES))
     scopes = {model_type: [model_type] for model_type in model_types}
     if len(model_types) > 1:
         scopes[CROSS_CLASS] = model_types
-    results = {}
+    results: dict[RankKey, RankTestResult] = {}
+
+    def test(key: RankKey, rows: pd.DataFrame, analysis: RankAnalysis, block) -> None:
+        try:
+            results[key] = rank_test(
+                rows,
+                block=block,
+                method="method",
+                score=analysis.column,
+                higher_is_better=analysis.higher_is_better,
+            )
+        except InsufficientData:
+            pass
+
     for analysis in RANK_ANALYSES:
-        source = family if analysis.by_family else overall
-        block = ["dataset", "model_type"] + (
-            ["change_family"] if analysis.by_family else []
+        dataset_level = (
+            family.groupby(["dataset", "model_type", "method"], as_index=False)[
+                analysis.column
+            ].mean()
+            if analysis.by_family
+            else overall
         )
         for scope, scope_types in scopes.items():
             methods = rank_test_methods(overall, scope_types)
-            rows = source[
-                source["model_type"].isin(scope_types) & source["method"].isin(methods)
+            rows = dataset_level[
+                dataset_level["model_type"].isin(scope_types)
+                & dataset_level["method"].isin(methods)
             ]
-            try:
-                results[analysis.name, scope] = rank_test(
-                    rows,
-                    block=block,
-                    method="method",
-                    score=analysis.column,
-                    higher_is_better=analysis.higher_is_better,
-                )
-            except InsufficientData:
+            block = ["dataset", "model_type"] if scope == CROSS_CLASS else "dataset"
+            test((analysis.name, scope, ALL_FAMILIES), rows, analysis, block)
+            if not analysis.by_family or scope == CROSS_CLASS:
                 continue
+            scoped = family[
+                family["model_type"].eq(scope) & family["method"].isin(methods)
+            ]
+            for change_family in ordered(scoped["change_family"], FAMILY_ORDER):
+                test(
+                    (analysis.name, scope, change_family),
+                    scoped[scoped["change_family"].eq(change_family)],
+                    analysis,
+                    "dataset",
+                )
     return results
 
 
-def rank_test_table(results: dict[tuple[str, str], RankTestResult]) -> pd.DataFrame:
+def rank_test_table(results: dict[RankKey, RankTestResult]) -> pd.DataFrame:
     """One row per analysis with test statistics and a ``rank_<method>`` column each."""
 
     methods = ordered(
@@ -756,6 +785,7 @@ def rank_test_table(results: dict[tuple[str, str], RankTestResult]) -> pd.DataFr
         {
             "analysis": analysis,
             "scope": scope,
+            "change_family": change_family,
             "statistic": result.statistic,
             "p_value": result.p_value,
             "n_blocks": result.n_blocks,
@@ -765,12 +795,13 @@ def rank_test_table(results: dict[tuple[str, str], RankTestResult]) -> pd.DataFr
             "alpha": result.alpha,
             **{f"rank_{method}": rank for method, rank in result.average_ranks.items()},
         }
-        for (analysis, scope), result in results.items()
+        for (analysis, scope, change_family), result in results.items()
     ]
     return pd.DataFrame(rows).reindex(
         columns=[
             "analysis",
             "scope",
+            "change_family",
             "statistic",
             "p_value",
             "n_blocks",
@@ -792,6 +823,13 @@ def rank_test_markdown(table: pd.DataFrame) -> str:
         {
             "Analysis": table["analysis"].map(analysis_labels),
             "Scope": table["scope"].map(SCOPE_LABELS),
+            "Change family": table["change_family"].map(
+                lambda value: (
+                    "averaged"
+                    if value == ALL_FAMILIES
+                    else FAMILY_LABELS.get(value, value)
+                )
+            ),
             "Blocks (dropped)": table["n_blocks"].astype(str)
             + " ("
             + table["n_blocks_dropped"].astype(str)
@@ -809,14 +847,22 @@ def rank_test_markdown(table: pd.DataFrame) -> str:
     return display.to_markdown(index=False)
 
 
-def plot_rank_diagrams(
-    output: Path, results: dict[tuple[str, str], RankTestResult]
-) -> None:
+def rank_diagram_stem(analysis: str, scope: str, change_family: str) -> str:
+    suffix = "" if change_family == ALL_FAMILIES else f"_{change_family}"
+    return f"critical_difference_{analysis}_{scope}{suffix}"
+
+
+def plot_rank_diagrams(output: Path, results: dict[RankKey, RankTestResult]) -> None:
     analysis_labels = {analysis.name: analysis.label for analysis in RANK_ANALYSES}
-    for (analysis, scope), result in results.items():
+    for (analysis, scope, change_family), result in results.items():
+        family_label = (
+            ""
+            if change_family == ALL_FAMILIES
+            else f", {FAMILY_LABELS.get(change_family, change_family)}"
+        )
         figure = plot_critical_difference(
             result,
-            title=f"{SCOPE_LABELS[scope]}: {analysis_labels[analysis]} "
+            title=f"{SCOPE_LABELS[scope]}: {analysis_labels[analysis]}{family_label} "
             f"(N = {result.n_blocks}, Friedman p = {result.p_value:.2g})",
             labels=METHOD_LABELS,
             colors=PAPER_METHOD_COLORS,
@@ -825,7 +871,8 @@ def plot_rank_diagrams(
         )
         for suffix, options in (("png", {"dpi": 300}), ("pdf", {})):
             figure.savefig(
-                output / f"critical_difference_{analysis}_{scope}.{suffix}",
+                output
+                / f"{rank_diagram_stem(analysis, scope, change_family)}.{suffix}",
                 bbox_inches="tight",
                 pad_inches=0.06,
                 **options,
@@ -1393,23 +1440,30 @@ def protocol_lines(overall: pd.DataFrame, family: pd.DataFrame) -> list[str]:
 
 def rank_test_section(table: pd.DataFrame) -> str:
     intro = (
-        "Methods are ranked within each block (dataset x change family; dataset "
-        "alone for distance; also model type in the cross-class scope), and the "
-        "Friedman test asks whether average ranks differ. Two methods differ "
-        "when their average ranks are further apart than the Nemenyi critical "
-        "difference at alpha = 0.05 (Demšar 2006, JMLR 7:1-30). Blocks where a "
-        "compared method is missing are dropped. Confidence-margin baselines "
-        "are excluded. Full results are in `rank_tests.csv`."
+        "Datasets are the independent blocks: change families within a dataset "
+        "share base models and counterfactuals. The main analysis ranks methods "
+        "per model type on their score averaged over change families; the "
+        "per-family analyses (in `rank_tests.csv`) repeat it for each change "
+        "family; the cross-class analysis uses dataset x model type blocks and "
+        "is descriptive, since datasets are shared. The Friedman test asks "
+        "whether average ranks differ, and two methods differ when their average "
+        "ranks are further apart than the Nemenyi critical difference at "
+        "alpha = 0.05 (Demšar 2006, JMLR 7:1-30). Blocks where a compared method "
+        "is missing are dropped. Confidence-margin baselines are excluded."
     )
     if table.empty:
         return f"{intro}\n\nNo analysis had enough methods and complete blocks."
+    main = table[table["change_family"].eq(ALL_FAMILIES)]
     analysis_labels = {analysis.name: analysis.label for analysis in RANK_ANALYSES}
     diagrams = "\n".join(
         f"- [{SCOPE_LABELS[scope]}: {analysis_labels[analysis]}]"
-        f"(critical_difference_{analysis}_{scope}.png)"
-        for analysis, scope in zip(table["analysis"], table["scope"], strict=True)
+        f"({rank_diagram_stem(analysis, scope, ALL_FAMILIES)}.png)"
+        for analysis, scope in zip(main["analysis"], main["scope"], strict=True)
     )
-    return f"{intro}\n\n{rank_test_markdown(table)}\n\nCritical-difference diagrams:\n\n{diagrams}"
+    return (
+        f"{intro}\n\n{rank_test_markdown(main)}\n\n"
+        f"Critical-difference diagrams:\n\n{diagrams}"
+    )
 
 
 def write_brief(

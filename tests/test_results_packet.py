@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from robustness_benchmark.cli.results_packet import (
+    ALL_FAMILIES,
     DATASETS,
     FAMILY_ORDER,
     MARGIN_METHODS,
@@ -19,6 +20,7 @@ from robustness_benchmark.cli.results_packet import (
     plot_paper_plausibility,
     plot_paper_tradeoff,
     plot_rank_diagrams,
+    rank_diagram_stem,
     rank_test_table,
     run_rank_tests,
     seed_summary,
@@ -233,7 +235,7 @@ def test_format_column_shows_n_a_for_unrecorded_values():
     ]
 
 
-def test_rank_tests_cover_each_model_type_and_the_shared_methods():
+def test_rank_tests_use_datasets_as_blocks():
     overall, family = synthetic_results()
 
     results = run_rank_tests(overall, family)
@@ -245,31 +247,38 @@ def test_rank_tests_cover_each_model_type_and_the_shared_methods():
         "end_to_end_robustness",
         "distance",
     }
-    cross = results["empirical_robustness", "cross_class"]
+    main = results["empirical_robustness", "mlp", ALL_FAMILIES]
+    assert main.n_blocks == len(DATASETS)
+    # one appendix analysis per change family, robustness metrics only
+    per_family = {
+        key[2] for key in results if key[:2] == ("empirical_robustness", "mlp")
+    }
+    assert per_family == {ALL_FAMILIES, *FAMILY_ORDER}
+    assert not any(key[0] == "distance" and key[2] != ALL_FAMILIES for key in results)
+    cross = results["empirical_robustness", "cross_class", ALL_FAMILIES]
     shared = set(MODEL_METHODS["xgboost"]) - set(MARGIN_METHODS[1:])
     assert set(cross.average_ranks.index) == shared
-    # dataset x family x model type blocks, all complete
-    assert cross.n_blocks == len(DATASETS) * len(FAMILY_ORDER) * 3
-    distance = results["distance", "mlp"]
+    assert cross.n_blocks == len(DATASETS) * 3  # dataset x model type
+    assert not any(
+        key[1] == "cross_class" and key[2] != ALL_FAMILIES for key in results
+    )
+    distance = results["distance", "mlp", ALL_FAMILIES]
     assert distance.n_blocks == len(DATASETS)
     assert not any(column.startswith("rank_gs_margin") for column in table.columns)
     # skill grows along METHOD_ORDER, so distance (lower is better) favours the last
     assert distance.average_ranks.index[0] == "growing_spheres"
-    assert (
-        results["empirical_robustness", "mlp"].average_ranks.index[0]
-        == "growing_spheres"
-    )
+    assert main.average_ranks.index[0] == "growing_spheres"
     assert table.loc[table["scope"].eq("xgboost"), "rank_wachter"].isna().all()
 
 
 def test_rank_tests_skip_analyses_without_complete_blocks():
     overall, family = synthetic_results()
-    family = family[family["dataset"].eq("heloc")]
+    one_dataset = family[family["dataset"].eq("heloc")]
 
-    results = run_rank_tests(overall, family)
+    results = run_rank_tests(overall, one_dataset)
 
-    assert ("distance", "mlp") in results
-    assert ("empirical_robustness", "mlp") in results
+    assert ("distance", "mlp", ALL_FAMILIES) in results
+    assert ("empirical_robustness", "mlp", ALL_FAMILIES) not in results  # one block
     assert run_rank_tests(overall, family.iloc[0:0]).keys() == {
         key for key in results if key[0] == "distance"
     }
@@ -281,12 +290,13 @@ def test_rank_diagrams_are_written_per_analysis(tmp_path):
 
     plot_rank_diagrams(tmp_path, results)
 
-    for analysis, scope in results:
+    for key in results:
         for suffix in ("pdf", "png"):
-            assert (
-                tmp_path / f"critical_difference_{analysis}_{scope}.{suffix}"
-            ).is_file()
+            assert (tmp_path / f"{rank_diagram_stem(*key)}.{suffix}").is_file()
     assert (tmp_path / "critical_difference_distance_cross_class.pdf").is_file()
+    assert (
+        tmp_path / "critical_difference_empirical_robustness_mlp_bootstrap.pdf"
+    ).is_file()
 
 
 def test_plausibility_figure_is_written_when_the_metric_was_recorded(tmp_path):
