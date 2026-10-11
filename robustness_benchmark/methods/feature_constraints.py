@@ -23,9 +23,9 @@ def search_projection(
 ) -> Callable[[np.ndarray], np.ndarray] | None:
     """Map a relaxed search iterate to the encoding the registry will score.
 
-    Gradient methods judge validity on this projected point, not on the
-    relaxed one, which projection can push back across the boundary. None on
-    unconstrained schemas, where methods run unchanged.
+    Wachter judges validity on this projected point, not on the relaxed one,
+    which projection can push back across the boundary. None on unconstrained
+    schemas, where it runs unchanged.
     """
 
     if not is_constrained(schema):

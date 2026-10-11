@@ -1,10 +1,12 @@
 """Wachter et al. (2017) gradient counterfactuals.
 
 Immutable columns get zero gradient, so Adam leaves them at the factual's
-values; one-hot and integer validity come from projection after the search.
-
-Deviation on constrained schemas: the search stops once the projected iterate
-is classified as the target, and returns that projected point.
+values. On constrained schemas the search stops once the projected iterate is
+classified as the target, and returns that projected point. Wachter et al.
+handle discrete features outside the gradient step (§IV.A, "Counterfactual
+Hybrid": clamping and separate runs per discrete value), and CARLA's
+``wachter_recourse`` predicts, stops and returns on the reconstructed encoding
+(``reconstruct_encoding_constraints``, catalog/wachter/library/wachter.py).
 """
 
 import datetime

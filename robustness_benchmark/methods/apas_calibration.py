@@ -178,6 +178,31 @@ def apas_method_config(
     }
 
 
+def rnce_method_config(
+    base_config: dict[str, object], calibration: dict[str, object]
+) -> dict[str, object]:
+    """RNCE's delta from the APAS update replicas, as Jiang et al. set delta_inc.
+
+    Their delta_inc is the mean L-infinity distance over all weights and biases
+    between the base model and models incrementally updated on new data (AIJ
+    2024 §8.2; ``incremental_training_get_delta`` in intabs/evaluation.py:35),
+    not the maximum APAS uses.
+    """
+
+    replicas = calibration["replicas"]
+    if not isinstance(replicas, list) or not replicas:
+        raise ValueError("RNCE delta needs at least one calibration replica")
+    delta = float(np.mean([replica["parameter_linf_distance"] for replica in replicas]))
+    return {
+        **base_config,
+        "delta": delta,
+        "bias_delta": delta,
+        "delta_selection": "mean_parameter_linf_over_checkpoint_aligned_update_replicas",
+        "calibration_fingerprint": calibration["calibration_fingerprint"],
+        "calibration_protocol_version": APAS_CALIBRATION_PROTOCOL_VERSION,
+    }
+
+
 def summarize_apas_calibration(
     calibration: dict[str, object], *, base_model_id: str, base_seed: int
 ) -> dict[str, object]:

@@ -70,7 +70,7 @@ def test_robustness_defining_parameters_are_not_grid_tuned():
         candidate["num_samples"] for candidate in TUNING_GRIDS["roar_lime"]
     }
     assert roar_delta == {0.1}
-    assert roar_sample_counts == {20_000}
+    assert roar_sample_counts == {5_000}
 
 
 def test_tuning_cache_rejects_stale_method_implementations():

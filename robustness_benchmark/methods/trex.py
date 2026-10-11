@@ -18,26 +18,24 @@ Deviations, all for comparability with RobX:
 - The Wachter base uses the fixed default settings, not the per-dataset tuned
   Wachter configuration, so T:Rex has no tuned hyperparameters.
 - 200 steps, the largest budget in Appendix D.
-- Immutable columns get zero gradient (the Wachter base also keeps them);
-  projection after the search restores one-hot and integer validity.
-- On constrained schemas, validity and R are checked at the projected iterate,
-  which is the point returned.
-"""
+- Immutable columns get zero gradient (the Wachter base also keeps them).
 
-from collections.abc import Callable
+As in the paper (App. D.1) and ``batch_trex_search``, one-hot and integer
+columns are searched as continuous and only clamped to the data box; the
+registry's final projection makes the returned point a valid encoding.
+"""
 
 import numpy as np
 import pandas as pd
 import torch
 
-from robustness_benchmark.methods.feature_constraints import search_projection
 from robustness_benchmark.methods.robx import (
     tau_from_stability_quantile,
     training_target_stability_scores,
 )
 from robustness_benchmark.methods.wachter import WACHTER_DEFAULTS, Wachter
 
-TREX_IMPLEMENTATION = "hamman2023_trex_i_robx_stability_v1"
+TREX_IMPLEMENTATION = "hamman2023_trex_i_robx_stability_v2"
 TAU_CALIBRATION_SEED_OFFSET = 81_000
 
 
@@ -62,14 +60,12 @@ def trex_search(
     feature_max: np.ndarray,
     rng: np.random.Generator,
     frozen: list[int] | None = None,
-    project: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> tuple[np.ndarray, float, int]:
     """Return the last valid iterate, its stability and the steps taken.
 
     Steps, the trust region and the box live in min-max coordinates
     z = (x - min) / (max - min), the [0, 1] scale the reference code uses;
-    stability is measured in the model's input coordinates. With ``project``,
-    validity and stability are checked at the projected iterate.
+    stability is measured in the model's input coordinates.
     """
 
     span = feature_max - feature_min
@@ -90,13 +86,9 @@ def trex_search(
         )
         stability = target_stability(model, x, noise)
         with torch.no_grad():
-            point, point_stability = x.detach(), stability.detach()
-            if project is not None:
-                point = torch.as_tensor(project(point.numpy()), dtype=torch.float32)
-                point_stability = target_stability(model, point, noise)
-            if float(model.predict_proba_tensor(point[None])) >= 0.5:
-                best = point.numpy().astype(float)
-                best_stability = float(point_stability)
+            if float(model.predict_proba_tensor(x[None])) >= 0.5:
+                best = x.detach().numpy().astype(float)
+                best_stability = float(stability.detach())
                 if best_stability >= tau:
                     return best, best_stability, step
         if step == max_steps:
@@ -126,7 +118,6 @@ class TRexAdapter:
         trust_radius: float = 1.0,
     ) -> None:
         self.model = task.model
-        self.schema = task.schema
         self.frozen = task.schema.immutable_columns()
         self.variance = variance
         self.stability_samples = stability_samples
@@ -184,7 +175,6 @@ class TRexAdapter:
             feature_max=self.feature_max,
             rng=self.rng,
             frozen=self.frozen,
-            project=search_projection(self.schema, factual.to_numpy()),
         )
         self.last_metadata = {
             **metadata,

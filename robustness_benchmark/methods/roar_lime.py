@@ -1,17 +1,15 @@
 """ROAR (Upadhyay et al., NeurIPS 2021) on a local LIME surrogate.
 
 Immutable columns get zero gradient in the ROAR optimizer, so they keep the
-factual's values; one-hot and integer validity come from projection after the
-search. LIME's surrogate samples perturb one-hot columns as continuous inputs;
-they only probe the black box and are never returned.
-
-Deviation on constrained schemas: the optimizer stops only once the loss has
-converged and the projected iterate is valid under the worst-case shift, and
-returns that projected point. If no projected iterate qualifies, it runs the
-full iteration budget and returns the last relaxed iterate, as on numeric data.
+factual's values. As in AI4LIFE's ``get_recourse``, Adam stops once the loss
+changes by at most ``loss_threshold`` (1e-4) and the relaxed iterate is
+returned: one-hot and integer columns are searched as continuous, and the
+registry's final projection makes the point a valid encoding. LIME's
+surrogate samples perturb one-hot columns as continuous inputs; they only
+probe the black box and are never returned.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -20,10 +18,10 @@ import torch
 from lime.lime_tabular import LimeTabularExplainer
 from sklearn.linear_model import LogisticRegression
 
-from robustness_benchmark.methods.feature_constraints import search_projection
-
-ROAR_LIME_IMPLEMENTATION = "upadhyay2021_box_logistic_lime_v2"
+ROAR_LIME_IMPLEMENTATION = "upadhyay2021_box_logistic_lime_v3"
 LIME_PARAMETER_DECIMALS = 4
+# The default of LIME's explain_instance, which AI4LIFE's lime_explanation uses.
+LIME_NUM_SAMPLES = 5_000
 
 
 def _as_scalar(value: Any) -> float:
@@ -81,7 +79,14 @@ def input_space_parameters(
     scale: np.ndarray,
     mean: np.ndarray,
 ) -> tuple[np.ndarray, float]:
-    """Convert LIME's standardized linear model to the task input coordinates."""
+    """Convert LIME's standardized linear model to the task input coordinates.
+
+    LIME fits its surrogate on features scaled by the training mean and std
+    (``explainer.scaler``) and reports coefficients in those units. AI4LIFE's
+    ``lime_explanation`` feeds them to ROAR unconverted, which matches the
+    model only on data that is already standardized; converting keeps ROAR's
+    objective in the coordinates it optimizes over.
+    """
 
     coefficients = scaled_coefficients / scale
     intercept = scaled_intercept - float(np.sum(scaled_coefficients * mean / scale))
@@ -122,13 +127,10 @@ def optimize_roar(
     loss_threshold: float,
     maximum_iterations: int,
     frozen: Sequence[int] = (),
-    project: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> tuple[np.ndarray, int, bool, float, float]:
     """Optimize the published ROAR min-max binary-cross-entropy objective.
 
     ``frozen`` columns get zero gradient, so Adam keeps them at the factual.
-    With ``project``, convergence also requires the projected iterate to be
-    valid under the worst-case shift, and that projected point is returned.
     """
 
     x = torch.as_tensor(factual, dtype=torch.float32)
@@ -143,7 +145,6 @@ def optimize_roar(
     iterations = 0
     validity_loss = x.new_tensor(float("nan"))
     cost = x.new_tensor(float("nan"))
-    result = None
     for iterations in range(1, maximum_iterations + 1):
         optimizer.zero_grad()
         worst_logit = worst_case_logit(candidate, weights, bias, target, delta)
@@ -161,24 +162,12 @@ def optimize_roar(
             previous_loss is not None
             and torch.abs(previous_loss - loss.detach()) <= loss_threshold
         ):
-            if project is None:
-                converged = True
-                break
-            projected = project(candidate.detach().numpy())
-            logit = worst_case_logit(
-                torch.as_tensor(projected, dtype=torch.float32),
-                weights,
-                bias,
-                target,
-                delta,
-            )
-            if (float(logit) >= 0.0) == bool(target):
-                converged, result = True, projected
-                break
+            converged = True
+            break
         previous_loss = loss.detach().clone()
 
     return (
-        candidate.detach().cpu().numpy() if result is None else result,
+        candidate.detach().cpu().numpy(),
         iterations,
         converged,
         float(validity_loss.detach()),
@@ -194,7 +183,7 @@ class RoarLimeAdapter:
         task: Any,
         *,
         seed: int,
-        num_samples: int = 20_000,
+        num_samples: int = LIME_NUM_SAMPLES,
         delta: float = 0.1,
         lambda_param: float = 0.01,
         learning_rate: float = 0.001,
@@ -269,7 +258,6 @@ class RoarLimeAdapter:
             loss_threshold=self.loss_threshold,
             maximum_iterations=self.maximum_iterations,
             frozen=self.task.schema.immutable_columns(),
-            project=search_projection(self.task.schema, factual_values),
         )
         result = pd.DataFrame([ce], columns=instance.index)
         factual_surrogate_probability = float(

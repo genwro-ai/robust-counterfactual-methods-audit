@@ -9,9 +9,20 @@ from robustness_benchmark.core.classifiers import (
     missing_capabilities,
 )
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION
-from robustness_benchmark.methods.rnce import RNCE_INTERVAL_ENCODING
+from robustness_benchmark.methods.rbr import RBR_IMPLEMENTATION
+from robustness_benchmark.methods.rnce import (
+    RNCE_IMPLEMENTATION,
+    RNCE_INTERVAL_ENCODING,
+)
 from robustness_benchmark.methods.roar import ROAR_IMPLEMENTATION
-from robustness_benchmark.methods.roar_lime import ROAR_LIME_IMPLEMENTATION
+from robustness_benchmark.methods.roar_lime import (
+    LIME_NUM_SAMPLES,
+    ROAR_LIME_IMPLEMENTATION,
+)
+from robustness_benchmark.methods.robust_adapters import (
+    BETARCE_IMPLEMENTATION,
+    ROBX_IMPLEMENTATION,
+)
 from robustness_benchmark.methods.trex import TREX_IMPLEMENTATION
 
 # Growing spheres counts a candidate once P(y=1) reaches the target; the
@@ -74,11 +85,14 @@ LOCKED_CONFIGS: dict[str, dict[str, object]] = {
         "wall_time_seconds": 30.0,
     },
     "rnce": {
+        "implementation": RNCE_IMPLEMENTATION,
+        "optimal": True,
         "delta": 0.005,
         "bias_delta": 0.005,
         "interval_encoding": RNCE_INTERVAL_ENCODING,
     },
     "rbr": {
+        "implementation": RBR_IMPLEMENTATION,
         "num_counterfactuals": 1_000,
         "num_samples": 200,
         "perturb_radius_fraction": 0.2,
@@ -89,7 +103,7 @@ LOCKED_CONFIGS: dict[str, dict[str, object]] = {
         "maximum_iterations": 500,
     },
     "betarce": {
-        "implementation": "paper_two_stage_growing_spheres_base200_v3",
+        "implementation": BETARCE_IMPLEMENTATION,
         "delta": 0.9,
         "alpha": 0.95,
         "generation_ensemble_n": 32,
@@ -97,22 +111,29 @@ LOCKED_CONFIGS: dict[str, dict[str, object]] = {
         "gs_n_search_samples": 100,
         "gs_p_norm": 2,
         "gs_step": 0.1,
-        "base_gs_max_iter": 200,
+        "base_gs_max_iter": 100,
         "gs_max_iter": 100,
     },
     "robx_balanced": {
+        "implementation": ROBX_IMPLEMENTATION,
         "variance": 0.01,
         "tau_quantile": 0.5,
         "tau_calibration": "training_target_stability_quantile_v1",
         "stability_samples": 1_000,
     },
     "robx_robust": {
+        "implementation": ROBX_IMPLEMENTATION,
         "variance": 0.01,
         "tau_quantile": 0.9,
         "tau_calibration": "training_target_stability_quantile_v1",
         "stability_samples": 1_000,
     },
-    "robx": {"variance": 0.01, "tau": 0.5, "stability_samples": 1_000},
+    "robx": {
+        "implementation": ROBX_IMPLEMENTATION,
+        "variance": 0.01,
+        "tau": 0.5,
+        "stability_samples": 1_000,
+    },
     "trex": {
         "implementation": TREX_IMPLEMENTATION,
         "variance": 0.01,
@@ -147,7 +168,7 @@ TUNING_GRIDS: dict[str, list[dict[str, object]]] = {
             "delta": 0.1,
             "lambda_param": float(lamb),
             "lr": 0.001,
-            "num_samples": 20_000,
+            "num_samples": LIME_NUM_SAMPLES,
             "loss_threshold": 0.0001,
             "maximum_iterations": 20_000,
         }

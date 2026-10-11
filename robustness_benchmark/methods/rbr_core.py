@@ -2,7 +2,6 @@ import numpy as np
 import torch
 from sklearn.utils import check_random_state
 
-from robustness_benchmark.methods.feature_constraints import search_projection
 from robustness_benchmark.methods.rbr_loss import RBRLoss
 
 
@@ -21,12 +20,9 @@ class RBR:
         random_state=None,
         device="cuda",
         frozen=None,
-        schema=None,
     ):
         self.random_state = check_random_state(random_state)
         self.frozen = list(frozen or [])
-        self.schema = schema
-        self.project = None
         self.model = model
         self.max_iter = max_iter
         self.y_target = y_target
@@ -46,19 +42,6 @@ class RBR:
     def dist(self, a, b):
         return torch.linalg.norm(a - b, ord=1, axis=-1)
 
-    def projected(self, x):
-        """``x`` as the registry will score it: projected on constrained schemas."""
-
-        if self.project is None:
-            return x
-        return torch.as_tensor(self.project(x.detach().cpu().numpy()), dtype=x.dtype)
-
-    def projected_if_valid(self, x, fallback=None):
-        """The projected ``x`` if it is classified as the target, else ``fallback``."""
-
-        point = self.projected(x).clone()
-        return point if self.make_prediction(point) == self.y_target else fallback
-
     def find_x_boundary(self, x, k=None):
         k = k or self.num_cfacts
         x_label = self.make_prediction(x)
@@ -75,9 +58,9 @@ class RBR:
         best_dist = torch.tensor(float("inf"))
 
         for x_cfact in x_cfact_list:
-            lambd_list = torch.linspace(0, 1, 100)[:, None]
-            line = self.projected((1 - lambd_list) * x + lambd_list * x_cfact)
-            for x_b in line:
+            lambd_list = torch.linspace(0, 1, 100)
+            for lambd in lambd_list:
+                x_b = (1 - lambd) * x + lambd * x_cfact
                 label = self.make_prediction(x_b)
                 if label == 1 - x_label:
                     dist = self.dist(x, x_b)
@@ -136,7 +119,6 @@ class RBR:
         min_loss = float("inf")
         num_stable_iter = 0
         max_stable_iter = 10
-        last_valid = self.projected_if_valid(x_t) if self.project is not None else None
 
         for t in range(self.max_iter):
             if x_t.grad is not None:
@@ -169,8 +151,6 @@ class RBR:
 
             for i, elem in enumerate(x_new.data):
                 x_t.data[i] = elem
-            if self.project is not None:
-                last_valid = self.projected_if_valid(x_t, last_valid)
 
             loss_sum = F.sum().data.item()
             loss_diff = min_loss - loss_sum
@@ -184,8 +164,6 @@ class RBR:
 
             min_loss = min(min_loss, loss_sum)
 
-        if last_valid is not None:
-            return F, last_valid
         return F, x_t.detach()
 
     def fit_instance(
@@ -203,7 +181,6 @@ class RBR:
         x0 = torch.from_numpy(x0.copy()).float().to(self.device)
         self.x0 = x0
         self.delta_plus = delta_plus
-        self.project = search_projection(self.schema, x0.cpu().numpy())
         x = x0.clone()
         x_b, delta_base = self.find_x_boundary(x)
         if x_b is None:

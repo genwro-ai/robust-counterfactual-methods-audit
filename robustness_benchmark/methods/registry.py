@@ -17,14 +17,20 @@ from robustness_benchmark.methods.configuration import (
 )
 from robustness_benchmark.methods.growing_spheres import GrowingSpheresAdapter
 from robustness_benchmark.methods.kdtree import KDTreeNNCE
-from robustness_benchmark.methods.rbr import RBRAdapter
-from robustness_benchmark.methods.rnce import RNCE
+from robustness_benchmark.methods.rbr import RBR_IMPLEMENTATION, RBRAdapter
+from robustness_benchmark.methods.rnce import RNCE, RNCE_IMPLEMENTATION
 from robustness_benchmark.methods.roar import ROAR_IMPLEMENTATION, RoarAdapter
 from robustness_benchmark.methods.roar_lime import (
+    LIME_NUM_SAMPLES,
     ROAR_LIME_IMPLEMENTATION,
     RoarLimeAdapter,
 )
-from robustness_benchmark.methods.robust_adapters import BetaRCEAdapter, RobXAdapter
+from robustness_benchmark.methods.robust_adapters import (
+    BETARCE_IMPLEMENTATION,
+    ROBX_IMPLEMENTATION,
+    BetaRCEAdapter,
+    RobXAdapter,
+)
 from robustness_benchmark.methods.trex import TREX_IMPLEMENTATION, TRexAdapter
 from robustness_benchmark.methods.wachter import WACHTER_DEFAULTS, Wachter
 
@@ -96,6 +102,7 @@ def create_generator(
     if name == "wachter":
         return Wachter(task), {**WACHTER_DEFAULTS, **config}
     if name == "rnce":
+        _check_implementation(config, "RNCE", RNCE_IMPLEMENTATION)
         return RNCE(task), config
     if name == "apas":
         _check_implementation(config, "APAS", APAS_IMPLEMENTATION)
@@ -116,6 +123,7 @@ def create_generator(
             config,
         )
     if name == "rbr":
+        _check_implementation(config, "RBR", RBR_IMPLEMENTATION)
         return (
             RBRAdapter(
                 task,
@@ -139,7 +147,7 @@ def create_generator(
             RoarLimeAdapter(
                 task,
                 seed=int(task.training_data.seed or 0),
-                num_samples=_int_config(config, "num_samples", 20_000),
+                num_samples=_int_config(config, "num_samples", LIME_NUM_SAMPLES),
                 delta=_float_config(config, "delta", 0.1),
                 lambda_param=_float_config(config, "lambda_param", 0.01),
                 learning_rate=_float_config(config, "lr", 0.001),
@@ -196,6 +204,7 @@ def create_generator(
         default_tau = 0.5
         if name != "robx" and "tau" not in config:
             raise ValueError(f"{name} requires a calibrated tau")
+        _check_implementation(config, "RobX", ROBX_IMPLEMENTATION)
         config.pop("tau_quantile", None)
         config.pop("tau_calibration", None)
         config.pop("tau_calibration_metadata", None)
@@ -213,11 +222,7 @@ def create_generator(
     if name == "betarce":
         if generation_models is None:
             raise ValueError("betarce requires a separate generation_models ensemble")
-        implementation = config.pop(
-            "implementation", "paper_two_stage_growing_spheres_base200_v3"
-        )
-        if implementation != "paper_two_stage_growing_spheres_base200_v3":
-            raise ValueError(f"Unsupported BetaRCE implementation {implementation!r}")
+        _check_implementation(config, "BetaRCE", BETARCE_IMPLEMENTATION)
         model_space = config.pop(
             "generation_model_space", "bootstrap_fixed_initialization_v2"
         )
@@ -234,7 +239,7 @@ def create_generator(
                 gs_n_search_samples=_int_config(config, "gs_n_search_samples", 100),
                 gs_p_norm=_int_config(config, "gs_p_norm", 2),
                 gs_step=_float_config(config, "gs_step", 0.1),
-                base_gs_max_iter=_int_config(config, "base_gs_max_iter", 200),
+                base_gs_max_iter=_int_config(config, "base_gs_max_iter", 100),
                 gs_max_iter=_int_config(config, "gs_max_iter", 100),
             ),
             config,

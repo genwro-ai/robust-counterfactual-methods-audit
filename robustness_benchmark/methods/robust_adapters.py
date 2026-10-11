@@ -1,9 +1,22 @@
+"""Adapters for RobX and BetaRCE with the BetaRCE authors' settings.
+
+Growing spheres uses 100 samples, p = 2, step 0.1 and 100 iterations in both
+methods (``gs`` and ``betarob.fixed_hps.gs`` in BetaRCE's configs/config_exp.yaml).
+RobX uses k = 3 conservative counterfactuals and 100 iterations (Dutta et al.,
+Algorithm 1; BetaRCE's ``robx_algorithm`` defaults).
+"""
+
 import numpy as np
 import pandas as pd
 
 from robustness_benchmark.methods.betarce import BetaRCE
 from robustness_benchmark.methods.growing_spheres import growing_spheres_search
 from robustness_benchmark.methods.robx import RobX
+
+BETARCE_IMPLEMENTATION = "paper_two_stage_growing_spheres_base100_v4"
+ROBX_IMPLEMENTATION = "dutta2022_algorithm1_closest_of_c_k3_v2"
+ROBX_K = 3
+ROBX_MAX_ITER = 100
 
 
 def _crisp(model, values: np.ndarray) -> np.ndarray:
@@ -50,13 +63,13 @@ class RobXAdapter:
             variance=self.variance,
             tau=self.tau,
             N=self.stability_samples,
-            k=10,
-            robx_max_iter=800,
+            k=ROBX_K,
+            robx_max_iter=ROBX_MAX_ITER,
             robx_lambda=0.1,
-            gs_n_search_samples=1_000,
-            gs_p_norm=1,
+            gs_n_search_samples=100,
+            gs_p_norm=2,
             gs_step=0.1,
-            gs_max_iter=800,
+            gs_max_iter=100,
             rng=np.random.default_rng(self.seed),
         )
         self.last_metadata = {
@@ -64,7 +77,8 @@ class RobXAdapter:
             "variance": self.variance,
             "tau": self.tau,
             "stability_samples": self.stability_samples,
-            "robx_k": 10,
+            "robx_implementation": ROBX_IMPLEMENTATION,
+            "robx_k": ROBX_K,
         }
         if result.counterfactual is None:
             return pd.DataFrame(columns=factual.index)
@@ -84,7 +98,7 @@ class BetaRCEAdapter:
         gs_n_search_samples: int = 100,
         gs_p_norm: int = 2,
         gs_step: float = 0.1,
-        base_gs_max_iter: int = 200,
+        base_gs_max_iter: int = 100,
         gs_max_iter: int = 100,
     ) -> None:
         if len(generation_models) != generation_ensemble_n:

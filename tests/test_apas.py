@@ -42,7 +42,7 @@ def test_apas_sample_count_and_successful_generation(monkeypatch):
     )
     result = generator.generate_for_instance(X.iloc[0])
 
-    assert generator.number_of_samples == 22
+    assert generator.number_of_samples == 21
     assert not result.empty
     assert mce.margins == [0.01]
     assert generator.last_metadata["method_certified"] is True
@@ -67,7 +67,7 @@ def test_apas_parameter_samples_are_reused():
     second = generator._parameter_concretizations()
 
     assert first is second
-    assert all(value.shape[0] == 22 for value in first.values())
+    assert all(value.shape[0] == 21 for value in first.values())
 
 
 def test_apas_confirmation_uses_an_independent_parameter_sample():
@@ -134,3 +134,23 @@ def test_apas_returns_author_candidate_but_does_not_overclaim_certificate(
         generator.last_metadata["apas_outcome"]
         == "author_sample_accepted_holdout_rejected"
     )
+
+
+def test_apas_reports_an_infeasible_mce_without_raising_the_margin():
+    # The network outputs logit -10 everywhere, so no input reaches class 1.
+    X = pd.DataFrame({"a": [-1.0, 1.0], "b": [0.0, 1.0]})
+    model = TorchBinaryModel(input_dim=2, hidden_dim=(1,), seed=0)
+    network = model.get_torch_model()
+    with torch.no_grad():
+        network[0].weight.zero_()
+        network[0].bias.zero_()
+        network[2].weight.zero_()
+        network[2].bias.fill_(-10.0)
+    task = make_task(model, X, pd.Series([0, 1]), seed=7)
+
+    generator = APASAdapter(task, seed=7, delta=0.01)
+    result = generator.generate_for_instance(X.iloc[0])
+
+    assert result.empty
+    assert generator.last_metadata["apas_outcome"] == "infeasible"
+    assert generator.last_metadata["apas_iterations"] == 1

@@ -116,18 +116,19 @@ FAST_CONFIGS = {
     "gs_margin_80": {},
 }
 # Methods whose own output, before the registry projects it, is always a valid
-# encoding; gradient methods return one only once its projection is valid.
+# encoding; Wachter returns one only once its projection is valid.
 VALID_BEFORE_PROJECTION = {
     "kdtree",
-    "rnce",
     "apas",
     "betarce",
     "growing_spheres",
     "gs_margin_80",
 }
-# Faithful to its original code, RobX treats every encoded column as
-# continuous; only the registry's projection makes its output valid.
-RELAXED_SEARCH = {"robx"}
+# Faithful to their original code, these search one-hot and integer columns as
+# continuous (RNCE in its line search) and return the relaxed point; only the
+# registry's projection makes their output valid. All but RobX keep immutables.
+RELAXED_SEARCH = {"robx", "trex", "roar_lime", "rbr", "rnce"}
+RELAXED_IMMUTABLES = {"robx"}
 
 
 class RecordingGenerator:
@@ -188,7 +189,11 @@ def test_mlp_methods_return_valid_encodings(monkeypatch, mixed_setting, method):
         if row["base_valid"] and method not in RELAXED_SEARCH:
             # Validity was judged on the returned point, not on a relaxed one.
             assert row["projection_changed"] is False
-    if method in RELAXED_SEARCH:
+    if method in RELAXED_SEARCH - {"rnce"}:
+        # The method returns its relaxed point; only the registry projects it.
+        # (RNCE's line points here happen to keep the job and whole years.)
+        assert any(row["projection_changed"] for row in rows)
+    if method in RELAXED_IMMUTABLES:
         return
     immutable = schema.immutable_columns()
     for factual, result in raw:
@@ -200,6 +205,32 @@ def test_mlp_methods_return_valid_encodings(monkeypatch, mixed_setting, method):
         )
         if method in VALID_BEFORE_PROJECTION:
             assert_valid(values, factual.to_numpy(), schema)
+
+
+@pytest.mark.parametrize("method", ["trex", "roar_lime", "rbr"])
+def test_reverted_methods_return_their_relaxed_point(
+    monkeypatch, mixed_setting, method
+):
+    X, y, schema, model, ensemble = mixed_setting
+    task = make_task(model, X, y, seed=3, schema=schema)
+    factuals = adverse(model, X)
+
+    counterfactuals, rows, raw = run_recorded(
+        monkeypatch, method, task, factuals, ensemble, FAST_CONFIGS[method]
+    )
+
+    relaxed = 0
+    for (factual, result), (_, ce), row in zip(
+        raw, counterfactuals.iterrows(), rows, strict=True
+    ):
+        if row["generation_status"] not in {"success", "base_invalid"}:
+            continue
+        values = result.iloc[0].to_numpy(dtype=float)
+        projected = schema.project(values, factual.to_numpy())
+        # The registry, not the method, projects the output.
+        np.testing.assert_allclose(ce.to_numpy(), projected)
+        relaxed += not np.allclose(values, projected)
+    assert relaxed
 
 
 @pytest.mark.parametrize("method", ["roar", "wachter", "growing_spheres"])
@@ -223,11 +254,14 @@ def test_logistic_methods_return_valid_encodings(mixed_setting, method):
     ):
         if row["base_valid"]:
             assert_valid(ce.to_numpy(), factual.to_numpy(), schema)
-            assert row["projection_changed"] is False
+            if method != "roar":
+                assert row["projection_changed"] is False
+    if method == "roar":
+        # ROAR returns its relaxed point; only the registry projects it.
+        assert any(row["projection_changed"] for row in rows)
 
 
-@pytest.mark.parametrize("method", ["wachter", "trex"])
-def test_gradient_search_judges_validity_after_rounding(method):
+def test_wachter_judges_validity_after_rounding():
     # P(y=1) passes 0.5 at age 10.3: a search that stops just past the
     # boundary rounds back to the adverse age 10, so it must reach 11.
     schema = FeatureSchema(
@@ -240,16 +274,20 @@ def test_gradient_search_judges_validity_after_rounding(method):
         model.get_torch_model()[0].bias.fill_(-51.5)
     task = make_task(model, X, (X["age"] > 10.3).astype(int), seed=0, schema=schema)
 
-    counterfactuals, (row,) = generate_counterfactuals(
-        method, task, X.iloc[[5]], method_config=FAST_CONFIGS[method]
-    )
+    counterfactuals, (row,) = generate_counterfactuals("wachter", task, X.iloc[[5]])
 
     assert row["generation_status"] == "success"
     assert row["projection_changed"] is False
     assert counterfactuals.iloc[0, 0] >= 11.0
 
 
-def test_milp_encodes_groups_immutables_and_integers():
+def milp_solution(job_c_weight: float) -> tuple[np.ndarray, TorchBinaryModel]:
+    """MCE's own solution for logit = relu(age + 10 hours + w job_c + 5) - 6.
+
+    The factual (age 0, hours 0, job a) has logit -1. Hours is immutable, age
+    an integer in steps of 0.1 (scale 10 years), job a mutable category.
+    """
+
     schema = FeatureSchema(
         columns=("age", "hours", "job_a", "job_b", "job_c"),
         categorical={"job": ("job_a", "job_b", "job_c")},
@@ -257,13 +295,10 @@ def test_milp_encodes_groups_immutables_and_integers():
         integer=("age",),
         immutable=("hours",),
     )
-    # logit = relu(age + 10 hours + 3 job_c + 5) - 6. Unconstrained, the
-    # cheapest L1 fixes are hours +0.1 (immutable) or job_c +0.33 (not one-hot);
-    # the valid optimum is age +1.1, i.e. 11 whole years (a job change costs 2).
     model = TorchBinaryModel(input_dim=5, hidden_dim=(1,), seed=0)
     network = model.get_torch_model()
     with torch.no_grad():
-        network[0].weight.copy_(torch.tensor([[1.0, 10.0, 0.0, 0.0, 3.0]]))
+        network[0].weight.copy_(torch.tensor([[1.0, 10.0, 0.0, 0.0, job_c_weight]]))
         network[0].bias.fill_(5.0)
         network[2].weight.fill_(1.0)
         network[2].bias.fill_(-6.0)
@@ -278,9 +313,26 @@ def test_milp_encodes_groups_immutables_and_integers():
 
     mce.generate_for_instance(factual, neg_value=0)
 
+    # The solver's own values, not the projected output.
     solution = np.array([mce.opt.inputNodes[f"v_0_{i}"].X for i in range(5)])
-    # The solver's own values, not the projected output, satisfy the schema.
+    return solution, model
+
+
+def test_milp_encodes_groups_immutables_and_integers():
+    # Unconstrained, the cheapest L1 fix is hours +0.1 (immutable); job c alone
+    # is not enough, so the valid optimum is age +1.1, i.e. 11 whole years.
+    solution, model = milp_solution(job_c_weight=0.5)
+
     np.testing.assert_allclose(solution, [1.1, 0.0, 1.0, 0.0, 0.0], atol=1e-6)
+    assert model.predict_single(solution) == 1
+
+
+def test_milp_category_switch_costs_one():
+    # Job c alone now suffices. It costs 1 (the largest one-hot change), less
+    # than 11 years at 1.1; at the summed L1 cost of 2, age would win.
+    solution, model = milp_solution(job_c_weight=3.0)
+
+    np.testing.assert_allclose(solution, [0.0, 0.0, 0.0, 0.0, 1.0], atol=1e-6)
     assert model.predict_single(solution) == 1
 
 
