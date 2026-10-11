@@ -68,7 +68,7 @@ def _pool_calibration(
                 "path": str(path.resolve()),
                 "model_id": payload["model_id"],
                 "parameter_linf_distance": distance,
-                **behavioral_distance(base_model, model, data.X_test),
+                **behavioral_distance(base_model, model, data.X_val),
             }
         )
     selected_delta = max(float(row["parameter_linf_distance"]) for row in records)
@@ -162,7 +162,9 @@ def main() -> None:
         method_config = {
             **LOCKED_CONFIGS["apas"],
             "delta": selected_delta,
-            "delta_selection": "max_linf_over_10_betarce_bootstrap_models",
+            "delta_selection": (
+                f"max_linf_over_{args.pool_members}_betarce_bootstrap_models"
+            ),
             "calibration_fingerprint": calibration["calibration_fingerprint"],
             "calibration_protocol_version": PROTOCOL_VERSION,
         }

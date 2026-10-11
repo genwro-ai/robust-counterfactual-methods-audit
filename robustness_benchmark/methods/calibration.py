@@ -157,8 +157,8 @@ def load_or_create_calibration(
         learning_rate=protocol.update_learning_rate,
         weight_decay=protocol.update_weight_decay,
     )
-    base_probability = base_model.predict(data.X_test).iloc[:, 0].to_numpy()
-    base_accuracy = float(np.mean((base_probability >= 0.5) == data.y_test.to_numpy()))
+    base_probability = base_model.predict(data.X_val).iloc[:, 0].to_numpy()
+    base_accuracy = float(np.mean((base_probability >= 0.5) == data.y_val.to_numpy()))
     records: list[dict[str, object]] = []
     checkpoints: list[dict[str, object]] = []
     for replicate, calibration in enumerate(calibration_models):
@@ -166,10 +166,10 @@ def load_or_create_calibration(
         if distance is None:
             raise RuntimeError("calibration model is not parameter-aligned")
         changed_probability = (
-            calibration.model.predict(data.X_test).iloc[:, 0].to_numpy()
+            calibration.model.predict(data.X_val).iloc[:, 0].to_numpy()
         )
         changed_accuracy = float(
-            np.mean((changed_probability >= 0.5) == data.y_test.to_numpy())
+            np.mean((changed_probability >= 0.5) == data.y_val.to_numpy())
         )
         path = directory / f"replica_{replicate:02d}.pt"
         save_model_checkpoint(
@@ -188,7 +188,7 @@ def load_or_create_calibration(
             {
                 "replicate": replicate,
                 "parameter_linf_distance": distance,
-                **behavioral_distance(base_model, calibration.model, data.X_test),
+                **behavioral_distance(base_model, calibration.model, data.X_val),
                 "base_calibration_accuracy": base_accuracy,
                 "changed_calibration_accuracy": changed_accuracy,
                 "calibration_accuracy_drop": base_accuracy - changed_accuracy,
