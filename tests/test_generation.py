@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from robustness_benchmark.core.model import TorchBinaryModel
-from robustness_benchmark.core.training import make_betarce_generation_model
+from robustness_benchmark.core.classifiers import TorchBinaryModel
+from robustness_benchmark.core.model_changes import make_betarce_generation_model
 from robustness_benchmark.evaluation.aggregate import generation_metrics
 from robustness_benchmark.methods import registry as methods
 from robustness_benchmark.methods.betarce import (
@@ -215,7 +215,9 @@ def test_betarce_bootstrap_members_keep_base_initialization(monkeypatch):
         observed["epochs"] = spec.epochs
         return object()
 
-    monkeypatch.setattr("robustness_benchmark.core.training.fit_spec", fake_fit_spec)
+    monkeypatch.setattr(
+        "robustness_benchmark.core.model_changes.fit_spec", fake_fit_spec
+    )
 
     class Split:
         X_train = pd.DataFrame({"a": np.arange(12)})

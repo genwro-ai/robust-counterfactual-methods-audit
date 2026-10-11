@@ -6,10 +6,7 @@ from tqdm.auto import tqdm
 
 from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.core.task import ClassificationTask, FrameDataset
-from robustness_benchmark.evaluation.plausibility import (
-    SPARSITY_TOLERANCE,
-    GowerDistance,
-)
+from robustness_benchmark.evaluation.proximity import SPARSITY_TOLERANCE, GowerDistance
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION, APASAdapter
 from robustness_benchmark.methods.betarce import BETARCE_IMPLEMENTATION, BetaRCEAdapter
 from robustness_benchmark.methods.configuration import (

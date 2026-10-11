@@ -5,11 +5,8 @@ import torch
 
 from robustness_benchmark.core.classifiers import LogisticClassifier, TorchBinaryModel
 from robustness_benchmark.core.schema import FeatureSchema
-from robustness_benchmark.evaluation.plausibility import (
-    GowerDistance,
-    PlausibilityReference,
-    feature_range,
-)
+from robustness_benchmark.evaluation.plausibility import PlausibilityReference
+from robustness_benchmark.evaluation.proximity import GowerDistance, feature_range
 from robustness_benchmark.methods import registry
 from robustness_benchmark.methods.kdtree import KDTreeNNCE
 from robustness_benchmark.methods.mce import MCE

@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.core.classifiers import TorchBinaryModel
 from robustness_benchmark.core.provenance import (
     file_sha256,
     load_model_checkpoint,

@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.core.classifiers import TorchBinaryModel
 from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.methods.rbr import LabelPredictor, RBRAdapter
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task

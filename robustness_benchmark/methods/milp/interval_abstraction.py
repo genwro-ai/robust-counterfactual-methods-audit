@@ -1,4 +1,4 @@
-from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.core.classifiers import TorchBinaryModel
 
 
 class IntervalAbstractionPytorch:

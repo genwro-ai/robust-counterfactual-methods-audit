@@ -1,10 +1,12 @@
+"""Robustness of counterfactuals under model changes."""
+
 import json
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import balanced_accuracy_score
 
-from robustness_benchmark.core.training import ChangedModel
+from robustness_benchmark.core.model_changes import ChangedModel
 
 
 def behavioral_distance(

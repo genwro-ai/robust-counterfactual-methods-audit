@@ -14,6 +14,11 @@ from robustness_benchmark.core.model_bank import (
     model_bank_fingerprint,
     select_factuals,
 )
+from robustness_benchmark.core.model_changes import (
+    BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
+    BETARCE_GENERATION_ENSEMBLE_SIZE,
+    make_betarce_generation_model,
+)
 from robustness_benchmark.core.model_specs import ModelSpec, spec_from_manifest
 from robustness_benchmark.core.provenance import (
     file_sha256,
@@ -21,21 +26,16 @@ from robustness_benchmark.core.provenance import (
     save_model_checkpoint,
     write_json,
 )
-from robustness_benchmark.core.training import (
-    BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
-    BETARCE_GENERATION_ENSEMBLE_SIZE,
-    make_betarce_generation_model,
-)
 from robustness_benchmark.evaluation.aggregate import (
     aggregate_survival,
     generation_metrics,
     normalize_survival_schema,
 )
-from robustness_benchmark.evaluation.metrics import evaluate_survival
 from robustness_benchmark.evaluation.plausibility import (
     PlausibilityReference,
     plausibility_summary,
 )
+from robustness_benchmark.evaluation.robustness import evaluate_survival
 from robustness_benchmark.methods.calibration import (
     RNCE_UPDATE_CALIBRATION,
     apas_method_config,

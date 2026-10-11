@@ -4,7 +4,7 @@ import pytest
 import torch
 from gurobipy import GRB
 
-from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.core.classifiers import TorchBinaryModel
 from robustness_benchmark.methods.calibration import rnce_method_config
 from robustness_benchmark.methods.configuration import LOCKED_CONFIGS
 from robustness_benchmark.methods.milp.delta_robustness import DeltaRobustnessEvaluator

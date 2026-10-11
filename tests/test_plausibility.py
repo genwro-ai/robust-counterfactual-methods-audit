@@ -8,10 +8,8 @@ from robustness_benchmark.cli.full_benchmark import (
     BENCHMARK_PROTOCOL_VERSION,
     write_summary,
 )
-from robustness_benchmark.evaluation.plausibility import (
-    PlausibilityReference,
-    feature_range,
-)
+from robustness_benchmark.evaluation.plausibility import PlausibilityReference
+from robustness_benchmark.evaluation.proximity import feature_range
 
 
 class ThresholdModel:

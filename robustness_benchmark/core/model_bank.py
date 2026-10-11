@@ -4,13 +4,13 @@ from pathlib import Path
 import pandas as pd
 
 from robustness_benchmark.core.data import select_adverse_indices
+from robustness_benchmark.core.model_changes import ChangedModel
 from robustness_benchmark.core.provenance import (
     file_sha256,
     load_model_checkpoint,
     row_id_value,
 )
-from robustness_benchmark.core.training import ChangedModel
-from robustness_benchmark.evaluation.metrics import stratify_severity
+from robustness_benchmark.evaluation.robustness import stratify_severity
 
 
 def load_base_model(bank: Path, base_seed: int) -> tuple[str, object]:

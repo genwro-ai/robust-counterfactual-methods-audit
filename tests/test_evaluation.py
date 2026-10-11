@@ -1,14 +1,14 @@
 import pandas as pd
 
-from robustness_benchmark.core.model import TorchBinaryModel
-from robustness_benchmark.core.training import ChangedModel
-from robustness_benchmark.evaluation.metrics import (
+from robustness_benchmark.core.classifiers import TorchBinaryModel
+from robustness_benchmark.core.model_changes import ChangedModel
+from robustness_benchmark.evaluation.aggregate import survival_summary
+from robustness_benchmark.evaluation.robustness import (
     assess_model_changes,
     behavioral_distance,
     evaluate_survival,
     stratify_severity,
 )
-from robustness_benchmark.evaluation.summaries import survival_summary
 
 
 def test_behavioral_distance_is_zero_for_identical_model():

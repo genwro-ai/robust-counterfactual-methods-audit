@@ -10,19 +10,17 @@ from robustness_benchmark.core.model_bank import (
     model_bank_fingerprint,
     select_factuals,
 )
+from robustness_benchmark.core.model_changes import parameter_linf_distance
 from robustness_benchmark.core.provenance import load_model_checkpoint, write_json
-from robustness_benchmark.core.training import parameter_linf_distance
 from robustness_benchmark.evaluation.aggregate import (
     aggregate_survival,
+    apas_generation_summary,
     generation_metrics,
+    seed_family_survival_summary,
 )
-from robustness_benchmark.evaluation.metrics import (
+from robustness_benchmark.evaluation.robustness import (
     behavioral_distance,
     evaluate_survival,
-)
-from robustness_benchmark.evaluation.summaries import (
-    apas_generation_summary,
-    seed_family_survival_summary,
 )
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION
 from robustness_benchmark.methods.calibration import stable_hash
@@ -174,7 +172,13 @@ def main() -> None:
             args.n_factuals,
             seed=base_seed + 30_000,
         )
-        task = make_task(base_model, data.X_train, data.y_train, seed=base_seed)
+        task = make_task(
+            base_model,
+            data.X_train,
+            data.y_train,
+            seed=base_seed,
+            schema=data.feature_schema,
+        )
         counterfactuals, generation = generate_counterfactuals(
             "apas",
             task,

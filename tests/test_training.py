@@ -5,19 +5,19 @@ import pandas as pd
 import pytest
 import torch
 
-from robustness_benchmark.core.model import TorchBinaryModel
-from robustness_benchmark.core.model_specs import (
-    FULL_VARIANTS_PER_FAMILY,
-    SGD_TRAINING_CONFIGS,
-    TRAINING_CONFIGS,
-)
-from robustness_benchmark.core.training import (
+from robustness_benchmark.core.classifiers import TorchBinaryModel
+from robustness_benchmark.core.model_changes import (
     FULL_CHANGE_FAMILIES,
     make_apas_calibration_models,
     make_bounded_parameter_change,
     make_changed_models,
     make_update_replicas,
     parameter_linf_distance,
+)
+from robustness_benchmark.core.model_specs import (
+    FULL_VARIANTS_PER_FAMILY,
+    SGD_TRAINING_CONFIGS,
+    TRAINING_CONFIGS,
 )
 
 
@@ -96,7 +96,9 @@ def test_full_bank_has_25_unique_candidates_per_family(monkeypatch):
         # Distinct configurations get distinct weights, so none reproduces the base.
         return spec.build(X_train.shape[1], seed + zlib.crc32(repr(spec).encode()))
 
-    monkeypatch.setattr("robustness_benchmark.core.training.fit_spec", untrained_model)
+    monkeypatch.setattr(
+        "robustness_benchmark.core.model_changes.fit_spec", untrained_model
+    )
     base = TorchBinaryModel(input_dim=2, hidden_dim=(32, 32), seed=2026)
 
     changes = make_changed_models(

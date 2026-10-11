@@ -1,18 +1,8 @@
-import argparse
-from pathlib import Path
+"""Aggregation of per-counterfactual rows into method summaries."""
 
 import pandas as pd
 
-from robustness_benchmark.core.provenance import write_json
-
 GENERATED_STATUSES = frozenset({"success", "base_invalid"})
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("inputs", nargs="+", type=Path)
-    parser.add_argument("--output", required=True, type=Path)
-    return parser.parse_args()
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -134,55 +124,123 @@ def aggregate_survival(survival: pd.DataFrame) -> list[dict[str, object]]:
     return rows
 
 
-def main() -> None:
-    args = parse_args()
-    args.output.mkdir(parents=True, exist_ok=True)
-    generation = pd.concat(
-        [pd.read_parquet(path / "generation.parquet") for path in args.inputs],
-        ignore_index=True,
-    )
-    survival = pd.concat(
-        [pd.read_parquet(path / "survival.parquet") for path in args.inputs],
-        ignore_index=True,
-    )
-    survival = normalize_survival_schema(survival)
-    factuals = pd.concat(
-        [pd.read_parquet(path / "factuals.parquet") for path in args.inputs],
-        ignore_index=True,
-    )
-    counterfactuals = pd.concat(
-        [pd.read_parquet(path / "counterfactuals.parquet") for path in args.inputs],
-        ignore_index=True,
-    )
+def generation_summary(generation: pd.DataFrame) -> list[dict[str, object]]:
+    """Summarize generation outcomes by method."""
 
-    generation.to_parquet(args.output / "generation.parquet", index=False)
-    survival.to_parquet(args.output / "survival.parquet", index=False)
-    factuals.to_parquet(args.output / "factuals.parquet", index=False)
-    counterfactuals.to_parquet(args.output / "counterfactuals.parquet", index=False)
-
-    generation_summary = []
-    for values, group in generation.groupby(["base_model_id", "method"], sort=True):
-        if not isinstance(values, tuple) or len(values) != 2:
-            raise RuntimeError(f"Unexpected generation group key: {values!r}")
-        base_model_id, method = str(values[0]), str(values[1])
-        generation_summary.append(
+    rows: list[dict[str, object]] = []
+    for method, group in generation.groupby("method", sort=True):
+        metrics = generation_metrics(group)
+        errors = int(group["generation_error"].notna().sum())
+        valid_group = group[group["base_valid"]]
+        rows.append(
             {
-                "base_model_id": base_model_id,
                 "method": method,
-                **generation_metrics(group),
+                **metrics,
+                "error_n": errors,
+                "mean_runtime_seconds": float(group["runtime_seconds"].mean()),
+                "mean_l1_scaled": (
+                    float(valid_group["l1_scaled_mean"].mean())
+                    if len(valid_group)
+                    else None
+                ),
+                "mean_gower_distance": (
+                    float(valid_group["gower_distance"].mean())
+                    if len(valid_group)
+                    else None
+                ),
             }
         )
-
-    write_json(
-        args.output / "summary.json",
-        {
-            "input_runs": [str(path.resolve()) for path in args.inputs],
-            "base_model_ids": sorted(survival["base_model_id"].unique().tolist()),
-            "generation": generation_summary,
-            "survival": aggregate_survival(survival),
-        },
-    )
+    return rows
 
 
-if __name__ == "__main__":
-    main()
+def survival_summary(survival: pd.DataFrame) -> list[dict[str, object]]:
+    """Summarize survival without conflating validity and coverage."""
+
+    survival = normalize_survival_schema(survival)
+    rows: list[dict[str, object]] = []
+    keys = ["base_model_id", "method", "change_id", "change_family", "change_level"]
+    for values, group in survival.groupby(keys, sort=True, dropna=False):
+        group_values = values if isinstance(values, tuple) else (values,)
+        total = len(group)
+        base_valid = int(group["base_valid"].sum())
+        eligible = int(group["conditional_eligible"].sum())
+        survived = int(group["conditional_survival"].eq(True).sum())
+        changed_valid = int(group["ce_valid"].eq(True).sum())
+        rows.append(
+            {
+                **dict(zip(keys, group_values, strict=True)),
+                "total_n": total,
+                "base_valid_pairs_n": base_valid,
+                "base_validity_rate": _ratio(base_valid, total),
+                "conditional_eligible_n": eligible,
+                "factual_eligibility_rate": _ratio(eligible, base_valid),
+                "conditional_survived_n": survived,
+                "conditional_survival": _ratio(survived, eligible),
+                "changed_model_valid_n": changed_valid,
+                "changed_validity_given_base_valid": _ratio(changed_valid, base_valid),
+                "end_to_end_changed_validity": _ratio(changed_valid, total),
+                "hard_disagreement": float(group["hard_disagreement"].iloc[0]),
+                "probability_mae": float(group["probability_mae"].iloc[0]),
+                "plain_accuracy_drop": float(group["plain_accuracy_drop"].iloc[0]),
+            }
+        )
+    return rows
+
+
+def apas_generation_summary(generation: pd.DataFrame) -> list[dict[str, object]]:
+    """Summarize calibrated APAS generation outcomes by base model."""
+
+    rows: list[dict[str, object]] = []
+    for base_model_id, group in generation.groupby("base_model_id", sort=True):
+        generated_valid = group[group["base_valid"]]
+        certified = group["method_certified"].eq(True)
+        rows.append(
+            {
+                "base_model_id": str(base_model_id),
+                "apas_delta": float(group["apas_delta"].iloc[0]),
+                **generation_metrics(group),
+                "certified_n": int(certified.sum()),
+                "certified_coverage": float(certified.mean()),
+                "mean_runtime_seconds": float(group["runtime_seconds"].mean()),
+                "mean_gower_distance": (
+                    float(generated_valid["gower_distance"].mean())
+                    if len(generated_valid)
+                    else None
+                ),
+            }
+        )
+    return rows
+
+
+def seed_family_survival_summary(
+    survival: pd.DataFrame,
+) -> list[dict[str, object]]:
+    """Summarize changed-model validity by base model and change family."""
+
+    rows: list[dict[str, object]] = []
+    for (base_model_id, family), group in survival.groupby(
+        ["base_model_id", "change_family"], sort=True
+    ):
+        eligible = group["conditional_eligible"].astype(bool)
+        base_valid = group["base_valid"].astype(bool)
+        changed_valid = group["ce_valid"].eq(True)
+        rows.append(
+            {
+                "base_model_id": str(base_model_id),
+                "change_family": str(family),
+                "changed_models_n": int(group["change_id"].nunique()),
+                "conditional_eligible_n": int(eligible.sum()),
+                "pooled_conditional_survival": (
+                    float(group.loc[eligible, "conditional_survival"].eq(True).mean())
+                    if eligible.any()
+                    else None
+                ),
+                "changed_validity_given_base_valid": (
+                    float(changed_valid.sum() / base_valid.sum())
+                    if base_valid.any()
+                    else None
+                ),
+                "end_to_end_changed_validity": float(changed_valid.mean()),
+            }
+        )
+    return rows

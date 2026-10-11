@@ -10,24 +10,26 @@ import torch
 
 from robustness_benchmark.core.classifiers import MODEL_TYPES
 from robustness_benchmark.core.data import DatasetSplit, load_dataset
+from robustness_benchmark.core.fitting import (
+    SELECTION_DEV_SEEDS,
+    fit_spec,
+    select_base_spec,
+)
+from robustness_benchmark.core.model_changes import (
+    BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
+    BETARCE_GENERATION_ENSEMBLE_SIZE,
+    DISTINCT_VALIDATION_MAE,
+    FULL_VARIANTS_PER_FAMILY,
+    make_betarce_generation_ensemble,
+    make_changed_models,
+)
 from robustness_benchmark.core.model_specs import MODEL_SPECS, MLPSpec, ModelSpec
 from robustness_benchmark.core.provenance import (
     file_sha256,
     save_model_checkpoint,
     write_json,
 )
-from robustness_benchmark.core.training import (
-    BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
-    BETARCE_GENERATION_ENSEMBLE_SIZE,
-    DISTINCT_VALIDATION_MAE,
-    FULL_VARIANTS_PER_FAMILY,
-    SELECTION_DEV_SEEDS,
-    fit_spec,
-    make_betarce_generation_ensemble,
-    make_changed_models,
-    select_base_spec,
-)
-from robustness_benchmark.evaluation.metrics import assess_model_changes
+from robustness_benchmark.evaluation.robustness import assess_model_changes
 
 
 def parse_args() -> argparse.Namespace:

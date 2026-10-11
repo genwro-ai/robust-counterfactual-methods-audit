@@ -1,7 +1,7 @@
 import pandas as pd
 import torch
 
-from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.core.classifiers import TorchBinaryModel
 from robustness_benchmark.methods import apas
 from robustness_benchmark.methods.apas import APASAdapter
 from robustness_benchmark.methods.registry import make_task

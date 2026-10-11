@@ -5,16 +5,16 @@ from pathlib import Path
 
 import numpy as np
 
+from robustness_benchmark.core.model_changes import (
+    make_update_replicas,
+    parameter_linf_distance,
+)
 from robustness_benchmark.core.provenance import (
     file_sha256,
     save_model_checkpoint,
     write_json,
 )
-from robustness_benchmark.core.training import (
-    make_update_replicas,
-    parameter_linf_distance,
-)
-from robustness_benchmark.evaluation.metrics import behavioral_distance
+from robustness_benchmark.evaluation.robustness import behavioral_distance
 
 APAS_CALIBRATION_PROTOCOL_VERSION = "apas_update_calibration_v1"
 RNCE_CALIBRATION_PROTOCOL_VERSION = "rnce_incremental_delta_v1"

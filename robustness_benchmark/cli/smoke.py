@@ -8,23 +8,23 @@ import numpy as np
 import pandas as pd
 
 from robustness_benchmark.core.data import load_dataset, select_adverse_indices
+from robustness_benchmark.core.fitting import fit_model
+from robustness_benchmark.core.model_changes import (
+    BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
+    make_betarce_generation_ensemble,
+    make_changed_models,
+)
 from robustness_benchmark.core.provenance import (
     file_sha256,
     row_id_value,
     save_model_checkpoint,
     write_json,
 )
-from robustness_benchmark.core.training import (
-    BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
-    fit_model,
-    make_betarce_generation_ensemble,
-    make_changed_models,
-)
-from robustness_benchmark.evaluation.metrics import evaluate_survival
-from robustness_benchmark.evaluation.summaries import (
+from robustness_benchmark.evaluation.aggregate import (
     generation_summary,
     survival_summary,
 )
+from robustness_benchmark.evaluation.robustness import evaluate_survival
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
 
 

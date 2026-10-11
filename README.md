@@ -34,16 +34,19 @@ time.
 
 ## Repository layout
 
-- `robustness_benchmark/core/`: datasets and the frozen split, the classifiers
-  (`classifiers/`: MLP, logistic regression, XGBoost), per-class training and
-  change rules (`model_specs.py`), the model-change bank, checkpoints and
-  provenance
-- `robustness_benchmark/methods/`: CFE implementations, adapters, method
-  configuration, and AP$\Delta$S radius calibration
-- `robustness_benchmark/evaluation/`: robustness metrics and aggregation
+- `robustness_benchmark/core/`: datasets and the frozen split, the feature
+  schema, the classifiers (`classifiers/`: MLP, logistic regression, XGBoost),
+  per-class training and change rules (`model_specs.py`), base-model training
+  and selection (`fitting.py`), the model changes derived from a base model
+  (`model_changes.py`), the model-change bank, checkpoints and provenance
+- `robustness_benchmark/methods/`: one module per CFE method with its adapter,
+  the shared MILP encoding (`milp/`), method configuration and registry, and
+  the AP$\Delta$S and RNCE radius calibration (`calibration.py`)
+- `robustness_benchmark/evaluation/`: proximity and sparsity, plausibility,
+  robustness under model changes, aggregation, rank tests and figure style
 - `robustness_benchmark/cli/`: the three protocol commands (`model_bank`,
   `full_benchmark`, `results_packet`), a smoke test, and an appendix diagnostic
-- `data/`: the three tabular datasets not shipped with scikit-learn
+- `data/`: the tabular datasets not shipped with scikit-learn
   (Breast Cancer is loaded from `sklearn.datasets`)
 - `tests/`: unit tests for the data contract, training, metrics, and methods
 
