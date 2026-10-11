@@ -1,5 +1,7 @@
 """Search-time helpers that keep candidates inside a FeatureSchema's valid set."""
 
+from collections.abc import Callable
+
 import numpy as np
 
 from robustness_benchmark.core.schema import FeatureSchema
@@ -14,6 +16,31 @@ def is_constrained(schema: FeatureSchema | None) -> bool:
     return schema is not None and bool(
         schema.categorical or schema.integer or schema.immutable
     )
+
+
+def search_projection(
+    schema: FeatureSchema | None, factual
+) -> Callable[[np.ndarray], np.ndarray] | None:
+    """Map a relaxed search iterate to the encoding the registry will score.
+
+    Gradient methods judge validity on this projected point, not on the
+    relaxed one, which projection can push back across the boundary. None on
+    unconstrained schemas, where methods run unchanged.
+    """
+
+    if not is_constrained(schema):
+        return None
+    reference = np.asarray(factual, dtype=float).reshape(-1)
+    return lambda candidate: schema.project(candidate, reference)
+
+
+def valid_projection(
+    model, project: Callable[[np.ndarray], np.ndarray], candidate, target: int = 1
+) -> np.ndarray | None:
+    """The projected candidate if ``model`` assigns it ``target``, else None."""
+
+    point = project(candidate)
+    return point if model.predict_single(point) == target else None
 
 
 def matches_immutable(rows, factual, schema: FeatureSchema) -> np.ndarray:

@@ -115,8 +115,8 @@ FAST_CONFIGS = {
     "growing_spheres": {},
     "gs_margin_80": {},
 }
-# Methods whose own output, before the registry projects it, is already a
-# valid encoding; the gradient methods only keep immutables during search.
+# Methods whose own output, before the registry projects it, is always a valid
+# encoding; gradient methods return one only once its projection is valid.
 VALID_BEFORE_PROJECTION = {
     "kdtree",
     "rnce",
@@ -183,6 +183,9 @@ def test_mlp_methods_return_valid_encodings(monkeypatch, mixed_setting, method):
     ):
         if row["generation_status"] in {"success", "base_invalid"}:
             assert_valid(ce.to_numpy(), factual.to_numpy(), schema)
+        if row["base_valid"]:
+            # Validity was judged on the returned point, not on a relaxed one.
+            assert row["projection_changed"] is False
     immutable = schema.immutable_columns()
     for factual, result in raw:
         if result.empty or not np.isfinite(result.to_numpy()).all():
@@ -216,6 +219,30 @@ def test_logistic_methods_return_valid_encodings(mixed_setting, method):
     ):
         if row["base_valid"]:
             assert_valid(ce.to_numpy(), factual.to_numpy(), schema)
+            assert row["projection_changed"] is False
+
+
+@pytest.mark.parametrize("method", ["wachter", "trex"])
+def test_gradient_search_judges_validity_after_rounding(method):
+    # P(y=1) passes 0.5 at age 10.3: a search that stops just past the
+    # boundary rounds back to the adverse age 10, so it must reach 11.
+    schema = FeatureSchema(
+        columns=("age",), numeric_scale={"age": (0.0, 1.0)}, integer=("age",)
+    )
+    X = pd.DataFrame({"age": np.arange(21.0)})
+    model = LogisticClassifier(input_dim=1)
+    with torch.no_grad():
+        model.get_torch_model()[0].weight.fill_(5.0)
+        model.get_torch_model()[0].bias.fill_(-51.5)
+    task = make_task(model, X, (X["age"] > 10.3).astype(int), seed=0, schema=schema)
+
+    counterfactuals, (row,) = generate_counterfactuals(
+        method, task, X.iloc[[5]], method_config=FAST_CONFIGS[method]
+    )
+
+    assert row["generation_status"] == "success"
+    assert row["projection_changed"] is False
+    assert counterfactuals.iloc[0, 0] >= 11.0
 
 
 def test_milp_encodes_groups_immutables_and_integers():
@@ -324,20 +351,25 @@ def test_numeric_data_outputs_match_without_and_with_identity_schema():
     X = pd.DataFrame(rng.normal(size=(120, 4)), columns=list("abcd"))
     y = pd.Series((X["a"] - 0.5 * X["b"] + 0.3 * X["c"] > 0).astype(int))
     model = mlp(X, y)
-    factuals = adverse(model, X)
+    logistic = LogisticClassifier(input_dim=X.shape[1], seed=1)
+    logistic.train(X, y, X_val=X, y_val=y, learning_rate=1e-2)
+    configs = {**FAST_CONFIGS, "roar": {"lr": 0.01, "maximum_iterations": 2_000}}
     identity = FeatureSchema(
         columns=tuple(X.columns),
         numeric_scale={name: (0.0, 1.0) for name in X.columns},
     )
     scale = robust_feature_scale(X.astype(np.float32)).to_numpy()
 
-    for method in ("kdtree", "wachter", "growing_spheres", "robx", "rbr", "trex"):
+    methods = ("kdtree", "wachter", "growing_spheres", "robx", "rbr", "trex")
+    for method in (*methods, "roar_lime", "roar"):
+        base = logistic if method == "roar" else model
+        factuals = adverse(base, X)
         outputs = [
             generate_counterfactuals(
                 method,
-                make_task(model, X, y, seed=3, schema=schema),
+                make_task(base, X, y, seed=3, schema=schema),
                 factuals,
-                method_config=FAST_CONFIGS[method],
+                method_config=configs[method],
             )
             for schema in (None, identity)
         ]

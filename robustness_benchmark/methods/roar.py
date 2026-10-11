@@ -8,10 +8,15 @@ surrogate is unnecessary and the box is centred on the model's exact
 parameters. The optimizer is shared with ROAR-LIME, including its masking of
 immutable columns; projection after the search restores one-hot and integer
 validity.
+
+Deviation on constrained schemas (shared with ROAR-LIME): the optimizer stops
+only once the loss has converged and the projected iterate is valid under the
+worst-case shift, and returns that projected point.
 """
 
 import pandas as pd
 
+from robustness_benchmark.methods.feature_constraints import search_projection
 from robustness_benchmark.methods.roar_lime import optimize_roar
 
 ROAR_IMPLEMENTATION = "upadhyay2021_box_logistic_exact_v1"
@@ -29,6 +34,7 @@ class RoarAdapter:
         maximum_iterations: int = 20_000,
     ) -> None:
         self.model = task.model
+        self.schema = task.schema
         self.frozen = task.schema.immutable_columns()
         self.coefficients, self.intercept = task.model.linear_parameters()
         self.delta = delta
@@ -52,6 +58,7 @@ class RoarAdapter:
             loss_threshold=self.loss_threshold,
             maximum_iterations=self.maximum_iterations,
             frozen=self.frozen,
+            project=search_projection(self.schema, instance.to_numpy()),
         )
         result = pd.DataFrame([ce], columns=instance.index)
         self.last_metadata = {

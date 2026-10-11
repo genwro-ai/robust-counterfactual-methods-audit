@@ -4,9 +4,13 @@ Immutable columns get zero gradient in the ROAR optimizer, so they keep the
 factual's values; one-hot and integer validity come from projection after the
 search. LIME's surrogate samples perturb one-hot columns as continuous inputs;
 they only probe the black box and are never returned.
+
+Deviation on constrained schemas: the optimizer stops only once the loss has
+converged and the projected iterate is valid under the worst-case shift, and
+returns that projected point.
 """
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import numpy as np
@@ -14,6 +18,8 @@ import pandas as pd
 import torch
 from lime.lime_tabular import LimeTabularExplainer
 from sklearn.linear_model import LogisticRegression
+
+from robustness_benchmark.methods.feature_constraints import search_projection
 
 ROAR_LIME_IMPLEMENTATION = "upadhyay2021_box_logistic_lime_v2"
 LIME_PARAMETER_DECIMALS = 4
@@ -92,6 +98,17 @@ def worst_case_parameter_shift(
     return weight_shift, intercept_shift
 
 
+def worst_case_logit(
+    values: torch.Tensor,
+    weights: torch.Tensor,
+    bias: torch.Tensor,
+    target: int,
+    delta: float,
+) -> torch.Tensor:
+    weight_shift, intercept_shift = worst_case_parameter_shift(values, target, delta)
+    return torch.dot(weights + weight_shift, values) + bias + intercept_shift
+
+
 def optimize_roar(
     factual: np.ndarray,
     coefficients: np.ndarray,
@@ -104,10 +121,13 @@ def optimize_roar(
     loss_threshold: float,
     maximum_iterations: int,
     frozen: Sequence[int] = (),
+    project: Callable[[np.ndarray], np.ndarray] | None = None,
 ) -> tuple[np.ndarray, int, bool, float, float]:
     """Optimize the published ROAR min-max binary-cross-entropy objective.
 
     ``frozen`` columns get zero gradient, so Adam keeps them at the factual.
+    With ``project``, convergence also requires the projected iterate to be
+    valid under the worst-case shift, and that projected point is returned.
     """
 
     x = torch.as_tensor(factual, dtype=torch.float32)
@@ -122,14 +142,10 @@ def optimize_roar(
     iterations = 0
     validity_loss = x.new_tensor(float("nan"))
     cost = x.new_tensor(float("nan"))
+    result = None
     for iterations in range(1, maximum_iterations + 1):
-        weight_shift, intercept_shift = worst_case_parameter_shift(
-            candidate, target, delta
-        )
         optimizer.zero_grad()
-        worst_logit = (
-            torch.dot(weights + weight_shift, candidate) + bias + intercept_shift
-        )
+        worst_logit = worst_case_logit(candidate, weights, bias, target, delta)
         validity_loss = torch.nn.functional.binary_cross_entropy_with_logits(
             worst_logit, target_tensor
         )
@@ -144,12 +160,24 @@ def optimize_roar(
             previous_loss is not None
             and torch.abs(previous_loss - loss.detach()) <= loss_threshold
         ):
-            converged = True
-            break
+            if project is None:
+                converged = True
+                break
+            projected = project(candidate.detach().numpy())
+            logit = worst_case_logit(
+                torch.as_tensor(projected, dtype=torch.float32),
+                weights,
+                bias,
+                target,
+                delta,
+            )
+            if (float(logit) >= 0.0) == bool(target):
+                converged, result = True, projected
+                break
         previous_loss = loss.detach().clone()
 
     return (
-        candidate.detach().cpu().numpy(),
+        candidate.detach().cpu().numpy() if result is None else result,
         iterations,
         converged,
         float(validity_loss.detach()),
@@ -240,6 +268,7 @@ class RoarLimeAdapter:
             loss_threshold=self.loss_threshold,
             maximum_iterations=self.maximum_iterations,
             frozen=self.task.schema.immutable_columns(),
+            project=search_projection(self.task.schema, factual_values),
         )
         result = pd.DataFrame([ce], columns=instance.index)
         factual_surrogate_probability = float(
