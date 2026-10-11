@@ -9,9 +9,7 @@ import pandas as pd
 
 from robustness_benchmark.core.data import load_dataset, select_adverse_indices
 from robustness_benchmark.core.provenance import (
-    environment_info,
     file_sha256,
-    git_info,
     row_id_value,
     save_model_checkpoint,
     write_json,
@@ -227,7 +225,6 @@ def main() -> None:
     }
     write_json(args.output / "summary.json", summary)
 
-    project_root = Path(__file__).resolve().parents[1]
     split_ids = {
         name: [row_id_value(value) for value in frame.index.tolist()]
         for name, frame in {
@@ -239,7 +236,12 @@ def main() -> None:
     }
     manifest = {
         "created_at": summary["created_at"],
-        "command": [sys.executable, "-m", "robustness_benchmark.cli.smoke", *sys.argv[1:]],
+        "command": [
+            sys.executable,
+            "-m",
+            "robustness_benchmark.cli.smoke",
+            *sys.argv[1:],
+        ],
         "configuration": {
             "dataset": args.dataset,
             "dataset_source": data.source,
@@ -275,8 +277,6 @@ def main() -> None:
             )
         ],
         "split_row_ids": split_ids,
-        "environment": environment_info(),
-        "project_git": git_info(project_root),
     }
     write_json(args.output / "manifest.json", manifest)
     console_summary = {
