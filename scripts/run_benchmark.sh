@@ -5,7 +5,12 @@
 #
 #   scripts/run_benchmark.sh [artifacts]
 #   DATASETS="german_credit adult" MODEL_TYPES=mlp scripts/run_benchmark.sh
+#
+# Unattended, e.g. over SSH:
+#   nohup caffeinate -is scripts/run_benchmark.sh > run.log 2>&1 < /dev/null &
 set -euo pipefail
+# Never read the launching terminal: Python cannot start once it has closed.
+exec < /dev/null
 
 ARTIFACTS="${1:-artifacts}"
 DATASETS="${DATASETS:-breast_cancer diabetes wine_quality heloc german_credit adult taiwan_default}"

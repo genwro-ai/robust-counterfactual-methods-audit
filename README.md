@@ -69,6 +69,11 @@ benchmark can be resumed with the same command.
 `scripts/run_benchmark.sh` runs all three steps for every dataset and model
 class (restrict them with `DATASETS=...` and `MODEL_TYPES=...`); re-running it
 resumes where it stopped.
+To leave it running after logging out, e.g. over SSH on macOS:
+
+```bash
+nohup caffeinate -is scripts/run_benchmark.sh > run.log 2>&1 < /dev/null &
+```
 
 ### 1. Train the base models and the changed-model bank
 
