@@ -283,6 +283,7 @@ def generate_counterfactuals(
         status = "exception"
         method_certified: bool | None = None
         projection_changed: bool | None = None
+        valid_before_projection: bool | None = None
         try:
             result = generator.generate_for_instance(factual, neg_value=0, **kwargs)
             if not isinstance(result, pd.DataFrame):
@@ -302,6 +303,8 @@ def generate_counterfactuals(
                 raise NoCounterfactualFound
             finite = bool(np.isfinite(ce.to_numpy()).all())
             if finite:
+                # Original papers score the raw output; it is kept for comparison.
+                valid_before_projection = task.model.predict_single(ce) == 1
                 # Methods search in a relaxed encoding; only a valid one is a CE.
                 projected = task.schema.project(ce.to_numpy(), factual.to_numpy())
                 projection_changed = bool(
@@ -339,6 +342,7 @@ def generate_counterfactuals(
                 "base_valid": bool(base_valid),
                 "method_certified": method_certified,
                 "projection_changed": projection_changed,
+                "base_valid_before_projection": valid_before_projection,
                 "generation_error": error,
                 **method_metadata,
                 "l1_scaled_sum": float(np.nansum(difference)) if base_valid else None,

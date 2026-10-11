@@ -26,12 +26,18 @@ def generation_metrics(group: pd.DataFrame) -> dict[str, int | float | None]:
     requested_n = len(group)
     generated_n = int(generated.sum())
     base_valid_n = int(group["base_valid"].sum())
+    # Runs predating the column have no pre-projection validity.
+    raw_valid = group.get("base_valid_before_projection")
+    raw_valid_n = None if raw_valid is None else int(raw_valid.eq(True).sum())
     return {
         "requested_n": requested_n,
         "generated_n": generated_n,
         "generation_coverage": _ratio(generated_n, requested_n),
         "base_valid_n": base_valid_n,
         "validity_given_generated": _ratio(base_valid_n, generated_n),
+        "validity_before_projection_given_generated": (
+            None if raw_valid_n is None else _ratio(raw_valid_n, generated_n)
+        ),
         "end_to_end_validity": _ratio(base_valid_n, requested_n),
     }
 

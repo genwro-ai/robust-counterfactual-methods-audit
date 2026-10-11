@@ -392,3 +392,21 @@ def test_numeric_data_outputs_match_without_and_with_identity_schema():
                 # The previous definition: mean robust-scaled L1 over columns.
                 legacy = np.nanmean(np.abs(ce.to_numpy() - factual.to_numpy()) / scale)
                 assert row["l1_robust_scale_mean"] == legacy
+
+
+def test_validity_before_projection_is_recorded(mixed_setting):
+    X, y, schema, model, _ = mixed_setting
+    task = make_task(model, X, y, seed=3, schema=schema)
+
+    _, rows = generate_counterfactuals(
+        "robx", task, adverse(model, X), method_config=FAST_CONFIGS["robx"]
+    )
+
+    generated = [
+        row for row in rows if row["generation_status"] in {"success", "base_invalid"}
+    ]
+    assert generated
+    assert all(
+        isinstance(row["base_valid_before_projection"], bool) for row in generated
+    )
+    assert all(row["projection_changed"] for row in generated)
