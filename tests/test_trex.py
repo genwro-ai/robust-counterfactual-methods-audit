@@ -8,6 +8,7 @@ from robustness_benchmark.core.classifiers import (
     MLPClassifier,
     XGBoostClassifier,
 )
+from robustness_benchmark.core.protocol import STABILITY_TAU_SEED_OFFSET
 from robustness_benchmark.methods.configuration import LOCKED_CONFIGS
 from robustness_benchmark.methods.registry import (
     UnsupportedModelError,
@@ -15,7 +16,7 @@ from robustness_benchmark.methods.registry import (
     generate_counterfactuals,
     make_task,
 )
-from robustness_benchmark.methods.robx import (
+from robustness_benchmark.methods.stability import (
     counterfactual_stability,
     tau_from_stability_quantile,
     training_target_stability_scores,
@@ -81,7 +82,7 @@ def test_trex_reaches_robx_calibrated_tau(model_class, kwargs):
     )
 
     scores, points = training_target_stability_scores(
-        X.to_numpy(), target_probability(model), seed=5 + 81_000
+        X.to_numpy(), target_probability(model), seed=5 + STABILITY_TAU_SEED_OFFSET
     )
     tau, _ = tau_from_stability_quantile(
         scores, quantile=0.5, target_training_points=points
@@ -89,8 +90,8 @@ def test_trex_reaches_robx_calibrated_tau(model_class, kwargs):
     rng = np.random.default_rng(0)
     for counterfactual, row in zip(counterfactuals.to_numpy(), rows, strict=True):
         assert row["generation_status"] == "success"
-        assert row["status"] == "ok"
-        assert row["tau"] == tau
+        assert row["trex_status"] == "ok"
+        assert row["trex_tau"] == tau
         assert row["trex_stability"] >= tau
         assert row["trex_steps"] > 0
         stability = counterfactual_stability(

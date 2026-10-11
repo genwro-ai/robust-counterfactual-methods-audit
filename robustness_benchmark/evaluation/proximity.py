@@ -3,9 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from robustness_benchmark.core.schema import FeatureSchema
-
-SPARSITY_TOLERANCE = 1e-6
+from robustness_benchmark.core.schema import CHANGE_TOLERANCE, FeatureSchema
 
 
 def feature_range(X: pd.DataFrame) -> pd.Series:
@@ -51,4 +49,4 @@ class GowerDistance:
         """Raw features changed beyond tolerance; a one-hot group counts once."""
 
         changed = np.abs(np.asarray(a, dtype=float) - np.asarray(b, dtype=float))
-        return ((changed > SPARSITY_TOLERANCE) @ self.membership > 0).sum(axis=-1)
+        return ((changed > CHANGE_TOLERANCE) @ self.membership > 0).sum(axis=-1)

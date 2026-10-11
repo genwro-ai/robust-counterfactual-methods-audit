@@ -17,9 +17,8 @@ import numpy as np
 import pandas as pd
 from scipy.spatial.distance import pdist
 
+from robustness_benchmark.methods.configuration import RBR_IMPLEMENTATION
 from robustness_benchmark.methods.rbr.core import RBR as AuthorRBR
-
-RBR_IMPLEMENTATION = "nguyen2022_authors_final_iterate_v2"
 
 
 class LabelPredictor:
@@ -41,14 +40,14 @@ class RBRAdapter:
         task,
         *,
         seed: int,
-        num_counterfactuals: int = 1_000,
-        num_samples: int = 200,
-        perturb_radius_fraction: float = 0.2,
-        delta_plus: float = 0.2,
-        sigma: float = 1.0,
-        epsilon_op: float = 0.5,
-        epsilon_pe: float = 0.5,
-        maximum_iterations: int = 500,
+        num_counterfactuals: int,
+        num_samples: int,
+        perturb_radius_fraction: float,
+        delta_plus: float,
+        sigma: float,
+        epsilon_op: float,
+        epsilon_pe: float,
+        maximum_iterations: int,
         generator=None,
     ) -> None:
         if num_counterfactuals <= 0 or num_samples <= 0 or maximum_iterations <= 0:

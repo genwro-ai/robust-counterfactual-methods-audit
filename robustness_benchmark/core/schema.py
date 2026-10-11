@@ -2,6 +2,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+# A column has changed when it moves by more than this.
+CHANGE_TOLERANCE = 1e-6
+
 
 @dataclass(frozen=True)
 class FeatureSchema:

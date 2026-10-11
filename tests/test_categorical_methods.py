@@ -8,6 +8,7 @@ from robustness_benchmark.core.schema import FeatureSchema
 from robustness_benchmark.evaluation.plausibility import PlausibilityReference
 from robustness_benchmark.evaluation.proximity import GowerDistance, feature_range
 from robustness_benchmark.methods import registry
+from robustness_benchmark.methods.configuration import default_config
 from robustness_benchmark.methods.kdtree import KDTreeNNCE
 from robustness_benchmark.methods.mce import MCE
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
@@ -94,13 +95,17 @@ def mixed_setting():
     return X, y, schema, model, ensemble
 
 
-FAST_CONFIGS = {
+FAST_OVERRIDES = {
     "kdtree": {},
     "wachter": {},
     "rnce": {"delta": 0.005, "bias_delta": 0.005},
     "apas": {"delta": 0.01, "wall_time_seconds": 10.0},
     "rbr": {"num_counterfactuals": 20, "num_samples": 50, "maximum_iterations": 50},
-    "roar_lime": {"num_samples": 500, "maximum_iterations": 500, "lr": 0.01},
+    "roar_lime": {
+        "num_samples": 500,
+        "maximum_iterations": 500,
+        "learning_rate": 0.01,
+    },
     "robx_balanced": {"variance": 0.01, "tau": 0.5, "stability_samples": 100},
     "betarce": {
         "generation_ensemble_n": 4,
@@ -111,6 +116,10 @@ FAST_CONFIGS = {
     "trex": {"stability_samples": 100, "max_steps": 20},
     "growing_spheres": {},
     "gs_margin_80": {},
+}
+FAST_CONFIGS = {
+    method: {**default_config(method), **overrides}
+    for method, overrides in FAST_OVERRIDES.items()
 }
 # Methods whose own output, before the registry projects it, is always a valid
 # encoding; Wachter returns one only once its projection is valid.
@@ -236,7 +245,9 @@ def test_logistic_methods_return_valid_encodings(mixed_setting, method):
     model = LogisticClassifier(input_dim=X.shape[1], seed=1)
     model.train(X, y, X_val=X, y_val=y, learning_rate=1e-2)
     factuals = adverse(model, X)
-    config = {"lr": 0.01, "maximum_iterations": 2_000} if method == "roar" else {}
+    config = default_config(method)
+    if method == "roar":
+        config.update(learning_rate=0.01, maximum_iterations=2_000)
 
     counterfactuals, rows = generate_counterfactuals(
         method,
@@ -271,7 +282,9 @@ def test_wachter_judges_validity_after_rounding():
         model.get_torch_model()[0].bias.fill_(-51.5)
     task = make_task(model, X, (X["age"] > 10.3).astype(int), seed=0, schema=schema)
 
-    counterfactuals, (row,) = generate_counterfactuals("wachter", task, X.iloc[[5]])
+    counterfactuals, (row,) = generate_counterfactuals(
+        "wachter", task, X.iloc[[5]], method_config=default_config("wachter")
+    )
 
     assert row["generation_status"] == "success"
     assert row["projection_changed"] is False
@@ -406,7 +419,14 @@ def test_numeric_data_outputs_match_without_and_with_identity_schema():
     model = mlp(X, y)
     logistic = LogisticClassifier(input_dim=X.shape[1], seed=1)
     logistic.train(X, y, X_val=X, y_val=y, learning_rate=1e-2)
-    configs = {**FAST_CONFIGS, "roar": {"lr": 0.01, "maximum_iterations": 2_000}}
+    configs = {
+        **FAST_CONFIGS,
+        "roar": {
+            **default_config("roar"),
+            "learning_rate": 0.01,
+            "maximum_iterations": 2_000,
+        },
+    }
     identity = FeatureSchema(
         columns=tuple(X.columns),
         numeric_scale={name: (0.0, 1.0) for name in X.columns},

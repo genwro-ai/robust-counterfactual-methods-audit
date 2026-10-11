@@ -12,6 +12,7 @@ from robustness_benchmark.methods.configuration import (
     GROWING_SPHERES_TARGETS,
     LOCKED_CONFIGS,
     TUNING_GRIDS,
+    default_config,
 )
 from robustness_benchmark.methods.registry import (
     UnsupportedModelError,
@@ -124,7 +125,12 @@ def test_roar_is_valid_under_its_worst_case_coefficient_shift():
     generator, kwargs = create_generator(
         "roar",
         task,
-        method_config={"delta": delta, "lambda_param": 0.01, "lr": 0.02},
+        method_config={
+            **default_config("roar"),
+            "delta": delta,
+            "lambda_param": 0.01,
+            "learning_rate": 0.02,
+        },
     )
 
     counterfactual = (

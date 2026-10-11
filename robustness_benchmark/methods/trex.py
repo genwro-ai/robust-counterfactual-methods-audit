@@ -30,13 +30,15 @@ import pandas as pd
 import torch
 
 from robustness_benchmark.core.protocol import STABILITY_TAU_SEED_OFFSET
-from robustness_benchmark.methods.robx import (
-    tau_from_stability_quantile,
-    training_target_stability_scores,
+from robustness_benchmark.methods.configuration import (
+    TREX_IMPLEMENTATION,
+    WACHTER_DEFAULTS,
 )
-from robustness_benchmark.methods.wachter import WACHTER_DEFAULTS, Wachter
-
-TREX_IMPLEMENTATION = "hamman2023_trex_i_robx_stability_v2"
+from robustness_benchmark.methods.stability import (
+    target_stability_scores,
+    tau_from_stability_quantile,
+)
+from robustness_benchmark.methods.wachter import Wachter
 
 
 def target_stability(model, x: torch.Tensor, noise: torch.Tensor) -> torch.Tensor:
@@ -110,12 +112,12 @@ class TRexAdapter:
         task,
         *,
         seed: int,
-        variance: float = 0.01,
-        stability_samples: int = 1_000,
-        tau_quantile: float = 0.5,
-        step_size: float = 0.01,
-        max_steps: int = 200,
-        trust_radius: float = 1.0,
+        variance: float,
+        stability_samples: int,
+        tau_quantile: float,
+        step_size: float,
+        max_steps: int,
+        trust_radius: float,
     ) -> None:
         self.model = task.model
         self.frozen = task.schema.immutable_columns()
@@ -127,13 +129,13 @@ class TRexAdapter:
         X_train = task.training_data.X.to_numpy()
         self.feature_min = X_train.min(axis=0)
         self.feature_max = X_train.max(axis=0)
-        # Same scores, seed and quantile rule as full_benchmark's RobX
+        # Same scores, seed and quantile rule as RobX's
         # calibration, so tau equals robx_balanced's on the same base model.
-        scores, target_points = training_target_stability_scores(
+        scores, target_points = target_stability_scores(
+            self.model,
             X_train,
-            lambda values: self.model.predict_proba(values).iloc[:, 1].to_numpy(),
             variance=variance,
-            N=stability_samples,
+            samples=stability_samples,
             seed=seed + STABILITY_TAU_SEED_OFFSET,
         )
         self.tau, self.tau_calibration = tau_from_stability_quantile(
@@ -149,17 +151,21 @@ class TRexAdapter:
         if neg_value != 0:
             raise ValueError("T:Rex is calibrated for the favorable class 1")
         metadata = {
-            "tau": self.tau,
-            "raw_tau": self.tau_calibration["raw_tau"],
-            "variance": self.variance,
-            "stability_samples": self.stability_samples,
-            "base_generator": "wachter",
+            "trex_implementation": TREX_IMPLEMENTATION,
+            "trex_tau": self.tau,
+            "trex_raw_tau": self.tau_calibration["raw_tau"],
+            "trex_variance": self.variance,
+            "trex_stability_samples": self.stability_samples,
+            "trex_base_generator": "wachter",
         }
         base = self.base_generator.generate_for_instance(
             factual, neg_value=neg_value, **WACHTER_DEFAULTS
         )
         if self.model.predict_single(base) != 1:
-            self.last_metadata = {**metadata, "status": "base_counterfactual_invalid"}
+            self.last_metadata = {
+                **metadata,
+                "trex_status": "base_counterfactual_invalid",
+            }
             return pd.DataFrame(columns=factual.index)
 
         counterfactual, stability, steps = trex_search(
@@ -178,7 +184,7 @@ class TRexAdapter:
         )
         self.last_metadata = {
             **metadata,
-            "status": "ok" if stability >= self.tau else "tau_not_reached",
+            "trex_status": "ok" if stability >= self.tau else "tau_not_reached",
             "trex_stability": stability,
             "trex_steps": steps,
         }

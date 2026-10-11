@@ -18,9 +18,9 @@ import torch
 from gurobipy import GRB
 from torch.func import functional_call, vmap
 
+from robustness_benchmark.methods.configuration import APAS_IMPLEMENTATION
 from robustness_benchmark.methods.mce import MCE
 
-APAS_IMPLEMENTATION = "marzari2024_algorithm2_calibrated_radius_holdout_v4"
 _CERTIFICATION_SEED_OFFSET = 1_000_003
 
 
@@ -72,12 +72,12 @@ class APASAdapter:
         *,
         seed: int,
         delta: float,
-        confidence: float = 0.999,
-        robustness_probability: float = 0.995,
-        initial_margin: float = 0.01,
-        increment: float = 0.2,
-        maximum_margin: float = 20.0,
-        wall_time_seconds: float = 30.0,
+        confidence: float,
+        robustness_probability: float,
+        initial_margin: float,
+        increment: float,
+        maximum_margin: float,
+        wall_time_seconds: float,
         mce: _MCEProtocol | None = None,
     ) -> None:
         if delta <= 0:

@@ -9,7 +9,6 @@ surrogate samples perturb one-hot columns as continuous inputs; they only
 probe the black box and are never returned.
 """
 
-from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -18,10 +17,10 @@ import torch
 from lime.lime_tabular import LimeTabularExplainer
 from sklearn.linear_model import LogisticRegression
 
-ROAR_LIME_IMPLEMENTATION = "upadhyay2021_box_logistic_lime_v3"
+from robustness_benchmark.methods.configuration import ROAR_LIME_IMPLEMENTATION
+from robustness_benchmark.methods.roar import optimize_roar
+
 LIME_PARAMETER_DECIMALS = 4
-# The default of LIME's explain_instance, which AI4LIFE's lime_explanation uses.
-LIME_NUM_SAMPLES = 5_000
 
 
 def _as_scalar(value: Any) -> float:
@@ -93,88 +92,6 @@ def input_space_parameters(
     return coefficients, intercept
 
 
-def worst_case_parameter_shift(
-    values: torch.Tensor, target: int, delta: float
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return the exact box-constrained shift that maximizes binary CE loss."""
-
-    direction = -1.0 if target == 1 else 1.0
-    weight_shift = direction * delta * torch.sign(values)
-    intercept_shift = values.new_tensor(direction * delta)
-    return weight_shift, intercept_shift
-
-
-def worst_case_logit(
-    values: torch.Tensor,
-    weights: torch.Tensor,
-    bias: torch.Tensor,
-    target: int,
-    delta: float,
-) -> torch.Tensor:
-    weight_shift, intercept_shift = worst_case_parameter_shift(values, target, delta)
-    return torch.dot(weights + weight_shift, values) + bias + intercept_shift
-
-
-def optimize_roar(
-    factual: np.ndarray,
-    coefficients: np.ndarray,
-    intercept: float,
-    *,
-    target: int,
-    delta: float,
-    lambda_param: float,
-    learning_rate: float,
-    loss_threshold: float,
-    maximum_iterations: int,
-    frozen: Sequence[int] = (),
-) -> tuple[np.ndarray, int, bool, float, float]:
-    """Optimize the published ROAR min-max binary-cross-entropy objective.
-
-    ``frozen`` columns get zero gradient, so Adam keeps them at the factual.
-    """
-
-    x = torch.as_tensor(factual, dtype=torch.float32)
-    weights = torch.as_tensor(coefficients, dtype=torch.float32)
-    bias = x.new_tensor(intercept)
-    target_tensor = x.new_tensor(float(target))
-    candidate = x.clone().requires_grad_(True)
-    optimizer = torch.optim.Adam([candidate], lr=learning_rate)
-
-    previous_loss: torch.Tensor | None = None
-    converged = False
-    iterations = 0
-    validity_loss = x.new_tensor(float("nan"))
-    cost = x.new_tensor(float("nan"))
-    for iterations in range(1, maximum_iterations + 1):
-        optimizer.zero_grad()
-        worst_logit = worst_case_logit(candidate, weights, bias, target, delta)
-        validity_loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            worst_logit, target_tensor
-        )
-        cost = torch.linalg.vector_norm(candidate - x, ord=1)
-        loss = validity_loss + lambda_param * cost
-        loss.backward()
-        if frozen:
-            candidate.grad[list(frozen)] = 0.0
-        optimizer.step()
-
-        if (
-            previous_loss is not None
-            and torch.abs(previous_loss - loss.detach()) <= loss_threshold
-        ):
-            converged = True
-            break
-        previous_loss = loss.detach().clone()
-
-    return (
-        candidate.detach().cpu().numpy(),
-        iterations,
-        converged,
-        float(validity_loss.detach()),
-        float(cost.detach()),
-    )
-
-
 class RoarLimeAdapter:
     """Apply published ROAR optimization to a local logistic LIME surrogate."""
 
@@ -183,12 +100,12 @@ class RoarLimeAdapter:
         task: Any,
         *,
         seed: int,
-        num_samples: int = LIME_NUM_SAMPLES,
-        delta: float = 0.1,
-        lambda_param: float = 0.01,
-        learning_rate: float = 0.001,
-        loss_threshold: float = 0.0001,
-        maximum_iterations: int = 20_000,
+        num_samples: int,
+        delta: float,
+        lambda_param: float,
+        learning_rate: float,
+        loss_threshold: float,
+        maximum_iterations: int,
     ) -> None:
         self.task = task
         self.seed = seed

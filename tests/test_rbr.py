@@ -4,6 +4,7 @@ import torch
 
 from robustness_benchmark.core.classifiers import MLPClassifier
 from robustness_benchmark.core.schema import FeatureSchema
+from robustness_benchmark.methods.configuration import default_config
 from robustness_benchmark.methods.rbr import LabelPredictor, RBRAdapter
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
 
@@ -78,7 +79,11 @@ def test_rbr_returns_no_counterfactual_when_the_loss_is_undefined():
         "rbr",
         task,
         X.iloc[[0]],
-        method_config={"perturb_radius_fraction": 2e-4, "num_samples": 50},
+        method_config={
+            **default_config("rbr"),
+            "perturb_radius_fraction": 2e-4,
+            "num_samples": 50,
+        },
     )
 
     assert rows[0]["generation_status"] == "no_counterfactual"
@@ -97,6 +102,8 @@ def test_rbr_returns_no_counterfactual_without_a_boundary_point():
     schema = FeatureSchema(columns=("a", "b"), immutable=("b",))
     task = make_task(model, X, pd.Series([0, 1]), seed=4, schema=schema)
 
-    _, rows = generate_counterfactuals("rbr", task, X.iloc[[0]])
+    _, rows = generate_counterfactuals(
+        "rbr", task, X.iloc[[0]], method_config=default_config("rbr")
+    )
 
     assert rows[0]["generation_status"] == "no_counterfactual"

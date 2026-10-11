@@ -154,11 +154,11 @@ class GrowingSpheresAdapter:
         task,
         *,
         seed: int,
-        target_probability: float = 0.5,
-        n_search_samples: int = 100,
-        p_norm: int = 2,
-        step: float = 0.1,
-        max_iter: int = 100,
+        target_probability: float,
+        n_search_samples: int,
+        p_norm: int,
+        step: float,
+        max_iter: int,
     ) -> None:
         if not 0.5 <= target_probability < 1.0:
             raise ValueError("target_probability must lie in [0.5, 1)")
@@ -195,8 +195,8 @@ class GrowingSpheresAdapter:
             schema=self.schema,
         )
         self.last_metadata = {
-            "status": "ok" if counterfactual is not None else "not_found",
-            "target_probability": self.target_probability,
+            "gs_status": "ok" if counterfactual is not None else "not_found",
+            "gs_target_probability": self.target_probability,
         }
         if counterfactual is None:
             return pd.DataFrame(columns=factual.index)

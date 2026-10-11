@@ -30,15 +30,17 @@ from robustness_benchmark.evaluation.aggregate import (
 )
 from robustness_benchmark.evaluation.robustness import evaluate_survival
 from robustness_benchmark.methods.configuration import (
-    LOCKED_CONFIGS,
     METHODS,
+    ROBX_METHODS,
+    default_config,
     unsupported_methods,
 )
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
 
 # APΔS, RNCE and RobX need per-base-model calibration, which only
-# full_benchmark performs; ROAR needs a linear model.
-CALIBRATED_METHODS = {"apas", "rnce", "robx_balanced", "robx_robust"}
+# full_benchmark performs; ROAR needs a linear model. Tuned methods use their
+# grid's first setting.
+CALIBRATED_METHODS = {"apas", "rnce", *ROBX_METHODS}
 SMOKE_METHODS = tuple(
     method
     for method in METHODS
@@ -97,7 +99,7 @@ def main() -> None:
             factual_ids=factual_ids,
             dataset_row_ids=dataset_row_ids,
             generation_models=generation_models,
-            method_config=dict(LOCKED_CONFIGS.get(method, {})),
+            method_config=default_config(method),
         )
         for row in method_generation:
             row["base_model_id"] = base_model_id

@@ -25,11 +25,10 @@ from sklearn.neighbors import KDTree
 
 from robustness_benchmark.core.task import ClassificationTask
 from robustness_benchmark.methods.base import CEGenerator
+from robustness_benchmark.methods.configuration import RNCE_INTERVAL_ENCODING
 from robustness_benchmark.methods.feature_constraints import matches_immutable
 from robustness_benchmark.methods.milp.delta_robustness import DeltaRobustnessEvaluator
 
-RNCE_INTERVAL_ENCODING = "sign_aware_first_layer_v2"
-RNCE_IMPLEMENTATION = "jiang2024_algorithm4_l1_line_search_v1"
 # Algorithm 4, line 2: step s = 0.05 from x' (a = 1) towards x; a = 1 is x'.
 LINE_SEARCH_WEIGHTS = np.linspace(0.05, 0.95, 19)
 

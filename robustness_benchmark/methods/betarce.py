@@ -16,9 +16,8 @@ from scipy import stats
 
 from robustness_benchmark.core.classifiers import predict_crisp
 from robustness_benchmark.core.schema import FeatureSchema
+from robustness_benchmark.methods.configuration import BETARCE_IMPLEMENTATION
 from robustness_benchmark.methods.growing_spheres import growing_spheres_search
-
-BETARCE_IMPLEMENTATION = "paper_two_stage_growing_spheres_base100_v4"
 
 
 def _get_ensemble_predictions_batch(
@@ -166,14 +165,14 @@ class BetaRCEAdapter:
         generation_models: list,
         *,
         seed: int,
-        delta: float = 0.9,
-        alpha: float = 0.95,
-        generation_ensemble_n: int = 32,
-        gs_n_search_samples: int = 100,
-        gs_p_norm: int = 2,
-        gs_step: float = 0.1,
-        base_gs_max_iter: int = 100,
-        gs_max_iter: int = 100,
+        delta: float,
+        alpha: float,
+        generation_ensemble_n: int,
+        gs_n_search_samples: int,
+        gs_p_norm: int,
+        gs_step: float,
+        base_gs_max_iter: int,
+        gs_max_iter: int,
     ) -> None:
         if len(generation_models) != generation_ensemble_n:
             raise ValueError(
@@ -217,12 +216,9 @@ class BetaRCEAdapter:
             schema=self.schema,
         )
         if base_counterfactual is None:
-            self.last_metadata = {
-                "status": "base_counterfactual_not_found",
-                "delta": self.delta,
-                "alpha": self.alpha,
-                "generation_ensemble_n": self.generation_ensemble_n,
-            }
+            self.last_metadata = self._metadata(
+                {"status": "base_counterfactual_not_found"}
+            )
             return pd.DataFrame(columns=factual.index)
 
         result = self.generator.generate(
@@ -236,18 +232,25 @@ class BetaRCEAdapter:
             gs_max_iter=self.gs_max_iter,
             rng=self.rng,
         )
-        self.last_metadata = {
-            **result.metadata,
-            "delta": self.delta,
-            "alpha": self.alpha,
-            "generation_ensemble_n": self.generation_ensemble_n,
-            "base_generator": "growing_spheres",
-            "gs_n_search_samples": self.gs_n_search_samples,
-            "gs_p_norm": self.gs_p_norm,
-            "gs_step": self.gs_step,
-            "base_gs_max_iter": self.base_gs_max_iter,
-            "gs_max_iter": self.gs_max_iter,
-        }
+        self.last_metadata = self._metadata(result.metadata)
         if result.counterfactual is None:
             return pd.DataFrame(columns=factual.index)
         return pd.DataFrame([result.counterfactual], columns=factual.index)
+
+    def _metadata(self, outcome: dict[str, object]) -> dict[str, object]:
+        return {
+            f"betarce_{key}": value
+            for key, value in {
+                **outcome,
+                "implementation": BETARCE_IMPLEMENTATION,
+                "delta": self.delta,
+                "alpha": self.alpha,
+                "generation_ensemble_n": self.generation_ensemble_n,
+                "base_generator": "growing_spheres",
+                "gs_n_search_samples": self.gs_n_search_samples,
+                "gs_p_norm": self.gs_p_norm,
+                "gs_step": self.gs_step,
+                "base_gs_max_iter": self.base_gs_max_iter,
+                "gs_max_iter": self.gs_max_iter,
+            }.items()
+        }

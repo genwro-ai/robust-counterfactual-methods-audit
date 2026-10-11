@@ -6,14 +6,17 @@ from gurobipy import GRB
 
 from robustness_benchmark.core.classifiers import MLPClassifier
 from robustness_benchmark.methods.calibration import rnce_method_config
-from robustness_benchmark.methods.configuration import LOCKED_CONFIGS
+from robustness_benchmark.methods.configuration import (
+    LOCKED_CONFIGS,
+    RNCE_INTERVAL_ENCODING,
+    default_config,
+)
 from robustness_benchmark.methods.milp.delta_robustness import DeltaRobustnessEvaluator
 from robustness_benchmark.methods.registry import (
     create_generator,
     generate_counterfactuals,
     make_task,
 )
-from robustness_benchmark.methods.rnce import RNCE_INTERVAL_ENCODING
 
 
 def minimum_pgd_logit(model, instance, delta, bias_delta, restarts=8, steps=100):
@@ -98,11 +101,7 @@ def test_rnce_rejects_unknown_interval_encoding():
     generator, kwargs = create_generator(
         "rnce",
         task,
-        method_config={
-            "delta": 0.005,
-            "bias_delta": 0.005,
-            "interval_encoding": "legacy",
-        },
+        method_config={**default_config("rnce"), "interval_encoding": "legacy"},
     )
 
     with pytest.raises(ValueError, match="Unsupported RNCE interval encoding"):
@@ -151,7 +150,10 @@ def test_rnce_picks_the_l1_nearest_robust_neighbour():
     X, task = sum_logit_task()
 
     counterfactuals, _ = generate_counterfactuals(
-        "rnce", task, X.iloc[[0]], method_config={"optimal": False}
+        "rnce",
+        task,
+        X.iloc[[0]],
+        method_config={**default_config("rnce"), "optimal": False},
     )
 
     assert counterfactuals.iloc[0].tolist() == [3.0, 0.0]
@@ -163,7 +165,10 @@ def test_rnce_line_search_returns_the_certified_point_nearest_the_factual():
     X, task = sum_logit_task()
 
     counterfactuals, (row,) = generate_counterfactuals(
-        "rnce", task, X.iloc[[0]], method_config={"optimal": True}
+        "rnce",
+        task,
+        X.iloc[[0]],
+        method_config={**default_config("rnce"), "optimal": True},
     )
 
     np.testing.assert_allclose(counterfactuals.iloc[0], [1.05, 0.0])

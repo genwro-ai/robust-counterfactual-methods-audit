@@ -1,10 +1,18 @@
+"""Per-base-model calibration of method radii and thresholds.
+
+APΔS and RNCE take their parameter radius from checkpoint-aligned update
+replicas of the base model; RobX takes its stability threshold from the base
+model's target-class training points. Changed models are never consulted.
+"""
+
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
-from robustness_benchmark.core.classifiers import MLPClassifier
+from robustness_benchmark.core.classifiers import MLPClassifier, predict_crisp
 from robustness_benchmark.core.data import DatasetSplit
 from robustness_benchmark.core.model_changes import (
     ChangedModel,
@@ -12,11 +20,17 @@ from robustness_benchmark.core.model_changes import (
     parameter_linf_distance,
 )
 from robustness_benchmark.core.model_specs import torch_incremental_update
+from robustness_benchmark.core.protocol import STABILITY_TAU_SEED_OFFSET
 from robustness_benchmark.core.provenance import (
     file_sha256,
     save_model_checkpoint,
     stable_hash,
     write_json,
+)
+from robustness_benchmark.methods.configuration import ROBX_METHODS
+from robustness_benchmark.methods.stability import (
+    target_stability_scores,
+    tau_from_stability_quantile,
 )
 
 APAS_CALIBRATION_PROTOCOL_VERSION = "apas_update_calibration_v1"
@@ -124,6 +138,17 @@ def apas_update_calibration(
 ) -> UpdateCalibration:
     """APAS: the largest distance over bootstrap updates on the whole pool."""
 
+    if replicates < 1:
+        raise ValueError("APAS calibration replicates must be positive")
+    if update_epochs < 1:
+        raise ValueError("APAS update epochs must be positive")
+    if update_batch_size < 1:
+        raise ValueError("APAS update batch size must be positive")
+    if update_learning_rate <= 0:
+        raise ValueError("APAS update learning rate must be positive")
+    if update_weight_decay < 0:
+        raise ValueError("APAS update weight decay cannot be negative")
+
     return UpdateCalibration(
         method="apas",
         protocol_version=APAS_CALIBRATION_PROTOCOL_VERSION,
@@ -230,19 +255,16 @@ def load_or_create_calibration(
         learning_rate=protocol.update_learning_rate,
         weight_decay=protocol.update_weight_decay,
     )
-    base_probability = base_model.predict(data.X_val).iloc[:, 0].to_numpy()
-    base_accuracy = float(np.mean((base_probability >= 0.5) == data.y_val.to_numpy()))
+    labels = data.y_val.to_numpy()
+    base_accuracy = float(np.mean(predict_crisp(base_model, data.X_val) == labels))
     records: list[dict[str, object]] = []
     checkpoints: list[dict[str, object]] = []
     for replicate, calibration in enumerate(calibration_models):
         distance = parameter_linf_distance(base_model, calibration.model)
         if distance is None:
             raise RuntimeError("calibration model is not parameter-aligned")
-        changed_probability = (
-            calibration.model.predict(data.X_val).iloc[:, 0].to_numpy()
-        )
         changed_accuracy = float(
-            np.mean((changed_probability >= 0.5) == data.y_val.to_numpy())
+            np.mean(predict_crisp(calibration.model, data.X_val) == labels)
         )
         path = directory / f"replica_{replicate:02d}.pt"
         save_model_checkpoint(
@@ -342,3 +364,83 @@ def summarize_calibration(
             np.mean([replica["probability_mae"] for replica in replicas])
         ),
     }
+
+
+METHOD_CONFIGS = {"apas": apas_method_config, "rnce": rnce_method_config}
+
+
+def robx_tau_configs(
+    configs: dict[str, dict[str, object]],
+    methods: list[str],
+    base_model,
+    X_train: pd.DataFrame,
+    base_seed: int,
+) -> dict[str, dict[str, object]]:
+    """Each RobX variant's threshold, a quantile of one shared score sample."""
+
+    resolved = {method: dict(configs[method]) for method in methods}
+    robx = [method for method in methods if method in ROBX_METHODS]
+    if not robx:
+        return resolved
+    variance = float(resolved[robx[0]]["variance"])
+    samples = int(resolved[robx[0]]["stability_samples"])
+    for method in robx:
+        if float(resolved[method]["variance"]) != variance:
+            raise ValueError("RobX variants must share one variance")
+        if int(resolved[method]["stability_samples"]) != samples:
+            raise ValueError("RobX variants must share one sample count")
+    scores, target_points = target_stability_scores(
+        base_model,
+        X_train.to_numpy(),
+        variance=variance,
+        samples=samples,
+        seed=base_seed + STABILITY_TAU_SEED_OFFSET,
+    )
+    for method in robx:
+        tau, metadata = tau_from_stability_quantile(
+            scores,
+            quantile=float(resolved[method]["tau_quantile"]),
+            target_training_points=target_points,
+        )
+        resolved[method]["tau"] = tau
+        resolved[method]["tau_calibration_metadata"] = metadata
+    return resolved
+
+
+def calibrate_seed_configs(
+    configs: dict[str, dict[str, object]],
+    methods: list[str],
+    *,
+    protocols: dict[str, UpdateCalibration],
+    output: Path,
+    data: DatasetSplit,
+    base_model,
+    base_model_id: str,
+    base_seed: int,
+    bank_fingerprint: str,
+) -> tuple[dict[str, dict[str, object]], list[dict[str, object]]]:
+    """Every method's configuration for one base model, and the calibrations."""
+
+    seed_configs = robx_tau_configs(
+        configs, methods, base_model, data.X_train, base_seed
+    )
+    summaries = []
+    for method, protocol in protocols.items():
+        if method not in methods:
+            continue
+        calibration = load_or_create_calibration(
+            protocol,
+            output=output,
+            data=data,
+            base_model=base_model,
+            base_model_id=base_model_id,
+            base_seed=base_seed,
+            bank_fingerprint=bank_fingerprint,
+        )
+        seed_configs[method] = METHOD_CONFIGS[method](configs[method], calibration)
+        summaries.append(
+            summarize_calibration(
+                calibration, base_model_id=base_model_id, base_seed=base_seed
+            )
+        )
+    return seed_configs, summaries

@@ -4,12 +4,14 @@ import numpy as np
 import pytest
 import torch
 
+from robustness_benchmark.methods.roar import (
+    optimize_roar,
+    worst_case_parameter_shift,
+)
 from robustness_benchmark.methods.roar_lime import (
     hard_label_probabilities,
     input_space_parameters,
     logistic_lime_parameters,
-    optimize_roar,
-    worst_case_parameter_shift,
 )
 
 

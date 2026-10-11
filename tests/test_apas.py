@@ -4,7 +4,18 @@ import torch
 from robustness_benchmark.core.classifiers import MLPClassifier
 from robustness_benchmark.methods import apas
 from robustness_benchmark.methods.apas import APASAdapter
+from robustness_benchmark.methods.configuration import default_config
 from robustness_benchmark.methods.registry import make_task
+
+APAS_SETTINGS = {
+    key: value
+    for key, value in default_config("apas").items()
+    if key != "implementation"
+}
+
+
+def apas_adapter(task, **overrides) -> APASAdapter:
+    return APASAdapter(task, **{**APAS_SETTINGS, **overrides})
 
 
 class FixedMCE:
@@ -32,7 +43,7 @@ def test_apas_sample_count_and_successful_generation(monkeypatch):
     monkeypatch.setattr(apas, "_solver_status", lambda _component: None)
     monkeypatch.setattr(apas, "_time_limit_status", lambda: 9)
 
-    generator = APASAdapter(
+    generator = apas_adapter(
         task,
         seed=7,
         delta=0.001,
@@ -54,7 +65,7 @@ def test_apas_parameter_samples_are_reused():
     y = pd.Series([0, 1])
     model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=3)
-    generator = APASAdapter(
+    generator = apas_adapter(
         task,
         seed=3,
         delta=0.001,
@@ -75,7 +86,7 @@ def test_apas_confirmation_uses_an_independent_parameter_sample():
     y = pd.Series([0, 1])
     model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=3)
-    generator = APASAdapter(
+    generator = apas_adapter(
         task,
         seed=3,
         delta=0.001,
@@ -105,7 +116,7 @@ def test_apas_returns_author_candidate_but_does_not_overclaim_certificate(
     monkeypatch.setattr(apas, "_reset_default_solver_limit", lambda: None)
     monkeypatch.setattr(apas, "_solver_status", lambda _component: None)
     monkeypatch.setattr(apas, "_time_limit_status", lambda: 9)
-    generator = APASAdapter(
+    generator = apas_adapter(
         task,
         seed=7,
         delta=0.001,
@@ -148,7 +159,7 @@ def test_apas_reports_an_infeasible_mce_without_raising_the_margin():
         network[2].bias.fill_(-10.0)
     task = make_task(model, X, pd.Series([0, 1]), seed=7)
 
-    generator = APASAdapter(task, seed=7, delta=0.01)
+    generator = apas_adapter(task, seed=7, delta=0.01)
     result = generator.generate_for_instance(X.iloc[0])
 
     assert result.empty

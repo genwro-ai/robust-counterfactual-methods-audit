@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -13,25 +15,30 @@ from robustness_benchmark.methods.betarce import (
     beta_left_bound_batch,
     beta_robustness_mask,
 )
+from robustness_benchmark.methods.configuration import default_config
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
-from robustness_benchmark.methods.robx import (
-    robx_algorithm,
-    tau_from_stability_quantile,
-)
+from robustness_benchmark.methods.robx import robx_algorithm
+from robustness_benchmark.methods.stability import tau_from_stability_quantile
 
 
 class ExplodingGenerator:
+    last_metadata: ClassVar[dict[str, object]] = {}
+
     def generate_for_instance(self, *_args, **_kwargs):
         raise RuntimeError("expected test failure")
 
 
 class EmptyGenerator:
+    last_metadata: ClassVar[dict[str, object]] = {}
+
     def generate_for_instance(self, *_args, **_kwargs):
         return pd.DataFrame(columns=["a", "b"])
 
 
 class FactualEchoGenerator:
     """Mimic RNCE's fallback of returning the factual unchanged."""
+
+    last_metadata: ClassVar[dict[str, object]] = {}
 
     def generate_for_instance(self, factual, **_kwargs):
         return pd.DataFrame([factual.to_numpy()], columns=factual.index)
@@ -86,13 +93,19 @@ def test_robx_adaptive_variants_require_resolved_tau():
     task = make_task(model, X, y, seed=0)
 
     with pytest.raises(ValueError, match="requires a calibrated tau"):
-        methods.create_generator("robx_balanced", task)
+        methods.create_generator(
+            "robx_balanced", task, method_config=default_config("robx_balanced")
+        )
 
     lower, lower_kwargs = methods.create_generator(
-        "robx_balanced", task, method_config={"tau": 0.71}
+        "robx_balanced",
+        task,
+        method_config={**default_config("robx_balanced"), "tau": 0.71},
     )
     upper, upper_kwargs = methods.create_generator(
-        "robx_robust", task, method_config={"tau": 0.89}
+        "robx_robust",
+        task,
+        method_config={**default_config("robx_robust"), "tau": 0.89},
     )
 
     assert lower_kwargs == {}
@@ -165,12 +178,16 @@ def test_betarce_adapter_robustifies_a_base_counterfactual(monkeypatch):
         pd.Series([0, 1]),
         seed=7,
     )
+    settings = {
+        key: value
+        for key, value in default_config("betarce").items()
+        if key not in {"implementation", "generation_model_space"}
+    }
     adapter = BetaRCEAdapter(
         task,
         [TargetModel() for _ in range(32)],
         seed=7,
-        base_gs_max_iter=200,
-        gs_max_iter=100,
+        **{**settings, "base_gs_max_iter": 200, "gs_max_iter": 100},
     )
     base_counterfactual = np.array([0.4, 0.6])
     robust_counterfactual = np.array([0.5, 0.7])
@@ -273,8 +290,8 @@ def test_apas_has_no_implicit_fixed_delta():
     model = MLPClassifier(input_dim=2, hidden_dim=(), seed=0)
     task = make_task(model, X, y, seed=0)
 
-    with pytest.raises(ValueError, match="delta must be provided explicitly"):
-        methods.create_generator("apas", task, method_config={})
+    with pytest.raises(ValueError, match=r"Missing method settings: \['delta'\]"):
+        methods.create_generator("apas", task, method_config=default_config("apas"))
 
 
 def test_no_counterfactual_is_not_reported_as_an_exception(monkeypatch):

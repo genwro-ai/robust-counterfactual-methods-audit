@@ -1,31 +1,32 @@
+"""Build a method's generator from its configuration and run it on factuals."""
+
+from collections.abc import Callable
 from time import perf_counter
 
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
-from robustness_benchmark.core.schema import FeatureSchema
+from robustness_benchmark.core.schema import CHANGE_TOLERANCE, FeatureSchema
 from robustness_benchmark.core.task import ClassificationTask, FrameDataset
-from robustness_benchmark.evaluation.proximity import SPARSITY_TOLERANCE, GowerDistance
-from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION, APASAdapter
-from robustness_benchmark.methods.betarce import BETARCE_IMPLEMENTATION, BetaRCEAdapter
+from robustness_benchmark.evaluation.proximity import GowerDistance
+from robustness_benchmark.methods.base import Generator
+from robustness_benchmark.methods.betarce import BetaRCEAdapter
 from robustness_benchmark.methods.configuration import (
+    BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
     GROWING_SPHERES_TARGETS,
+    IMPLEMENTATIONS,
+    ROBX_METHODS,
     unsupported_methods,
 )
 from robustness_benchmark.methods.growing_spheres import GrowingSpheresAdapter
 from robustness_benchmark.methods.kdtree import KDTreeNNCE
-from robustness_benchmark.methods.rbr import RBR_IMPLEMENTATION, RBRAdapter
-from robustness_benchmark.methods.rnce import RNCE, RNCE_IMPLEMENTATION
-from robustness_benchmark.methods.roar import ROAR_IMPLEMENTATION, RoarAdapter
-from robustness_benchmark.methods.roar_lime import (
-    LIME_NUM_SAMPLES,
-    ROAR_LIME_IMPLEMENTATION,
-    RoarLimeAdapter,
-)
-from robustness_benchmark.methods.robx import ROBX_IMPLEMENTATION, RobXAdapter
-from robustness_benchmark.methods.trex import TREX_IMPLEMENTATION, TRexAdapter
-from robustness_benchmark.methods.wachter import WACHTER_DEFAULTS, Wachter
+from robustness_benchmark.methods.rbr import RBRAdapter
+from robustness_benchmark.methods.roar import RoarAdapter
+from robustness_benchmark.methods.roar_lime import RoarLimeAdapter
+from robustness_benchmark.methods.robx import RobXAdapter
+from robustness_benchmark.methods.trex import TRexAdapter
+from robustness_benchmark.methods.wachter import Wachter
 
 
 class NoCounterfactualFound(Exception):
@@ -36,207 +37,209 @@ class UnsupportedModelError(ValueError):
     """A method cannot run on the model class it was asked to explain."""
 
 
-def _float_config(config: dict[str, object], key: str, default: float) -> float:
-    value = config.pop(key, default)
-    if not isinstance(value, (int, float)):
-        raise TypeError(f"{key} must be numeric")
-    return float(value)
-
-
-def _required_float_config(config: dict[str, object], key: str) -> float:
-    if key not in config:
-        raise ValueError(f"{key} must be provided explicitly")
-    return _float_config(config, key, 0.0)
-
-
-def _int_config(config: dict[str, object], key: str, default: int) -> int:
-    value = config.pop(key, default)
-    if not isinstance(value, int):
-        raise TypeError(f"{key} must be an integer")
-    return value
-
-
-def _check_implementation(config: dict[str, object], name: str, expected: str) -> None:
-    implementation = config.pop("implementation", expected)
-    if implementation != expected:
-        raise ValueError(
-            f"Unsupported {name} implementation {implementation!r}; "
-            f"expected {expected!r}"
-        )
-
-
 def make_task(
     model,
     X_train: pd.DataFrame,
     y_train: pd.Series,
     seed: int,
     schema: FeatureSchema | None = None,
-):
+) -> ClassificationTask:
     return ClassificationTask(
         model, FrameDataset(X_train, y_train, seed=seed, schema=schema)
     )
 
 
+def _settings(config: dict[str, object], *keys: str) -> dict[str, object]:
+    """Take the named settings out of ``config``; every one is required."""
+
+    missing = [key for key in keys if key not in config]
+    if missing:
+        raise ValueError(f"Missing method settings: {missing}")
+    return {key: config.pop(key) for key in keys}
+
+
+def _seed(task: ClassificationTask) -> int:
+    return int(task.training_data.seed or 0)
+
+
+# A factory returns the generator and the keyword arguments of every call.
+Factory = Callable[
+    [ClassificationTask, dict[str, object], list | None],
+    tuple[Generator, dict[str, object]],
+]
+
+
+def _kdtree(task, _config, _models):
+    return KDTreeNNCE(task), {}
+
+
+def _wachter(task, config, _models):
+    return Wachter(task), _settings(
+        config, "lamb", "lr", "max_iter", "max_allowed_minutes"
+    )
+
+
+def _rnce(task, config, _models):
+    # Imported here so that methods without a MILP do not need Gurobi.
+    from robustness_benchmark.methods.rnce import RNCE
+
+    return RNCE(task), _settings(
+        config, "optimal", "delta", "bias_delta", "interval_encoding"
+    )
+
+
+def _apas(task, config, _models):
+    from robustness_benchmark.methods.apas import APASAdapter
+
+    settings = _settings(
+        config,
+        "delta",
+        "confidence",
+        "robustness_probability",
+        "initial_margin",
+        "increment",
+        "maximum_margin",
+        "wall_time_seconds",
+    )
+    return APASAdapter(task, seed=_seed(task), **settings), {}
+
+
+def _rbr(task, config, _models):
+    settings = _settings(
+        config,
+        "num_counterfactuals",
+        "num_samples",
+        "perturb_radius_fraction",
+        "delta_plus",
+        "sigma",
+        "epsilon_op",
+        "epsilon_pe",
+        "maximum_iterations",
+    )
+    return RBRAdapter(task, seed=_seed(task), **settings), {}
+
+
+ROAR_SETTINGS = (
+    "delta",
+    "lambda_param",
+    "learning_rate",
+    "loss_threshold",
+    "maximum_iterations",
+)
+
+
+def _roar_lime(task, config, _models):
+    settings = _settings(config, "num_samples", *ROAR_SETTINGS)
+    return RoarLimeAdapter(task, seed=_seed(task), **settings), {}
+
+
+def _roar(task, config, _models):
+    return RoarAdapter(task, **_settings(config, *ROAR_SETTINGS)), {}
+
+
+def _trex(task, config, _models):
+    settings = _settings(
+        config,
+        "variance",
+        "stability_samples",
+        "tau_quantile",
+        "step_size",
+        "max_steps",
+        "trust_radius",
+    )
+    return TRexAdapter(task, seed=_seed(task), **settings), {}
+
+
+def _growing_spheres(task, config, _models):
+    settings = _settings(
+        config, "target_probability", "n_search_samples", "p_norm", "step", "max_iter"
+    )
+    return GrowingSpheresAdapter(task, seed=_seed(task), **settings), {}
+
+
+def _robx(task, config, _models):
+    if "tau" not in config:
+        raise ValueError("RobX requires a calibrated tau")
+    settings = _settings(
+        config,
+        "variance",
+        "tau",
+        "stability_samples",
+        "k",
+        "max_iter",
+        "robx_lambda",
+        "gs_n_search_samples",
+        "gs_p_norm",
+        "gs_step",
+        "gs_max_iter",
+    )
+    return RobXAdapter(task, seed=_seed(task), **settings), {}
+
+
+def _betarce(task, config, generation_models):
+    if generation_models is None:
+        raise ValueError("betarce requires a separate generation_models ensemble")
+    model_space = config.pop("generation_model_space")
+    if model_space != BETARCE_GENERATION_ENSEMBLE_PROTOCOL:
+        raise ValueError(f"Unsupported BetaRCE model space {model_space!r}")
+    settings = _settings(
+        config,
+        "delta",
+        "alpha",
+        "generation_ensemble_n",
+        "gs_n_search_samples",
+        "gs_p_norm",
+        "gs_step",
+        "base_gs_max_iter",
+        "gs_max_iter",
+    )
+    return BetaRCEAdapter(task, generation_models, seed=_seed(task), **settings), {}
+
+
+FACTORIES: dict[str, Factory] = {
+    "kdtree": _kdtree,
+    "wachter": _wachter,
+    "rnce": _rnce,
+    "apas": _apas,
+    "rbr": _rbr,
+    "roar_lime": _roar_lime,
+    "roar": _roar,
+    "trex": _trex,
+    "betarce": _betarce,
+    **{method: _robx for method in ROBX_METHODS},
+    **{method: _growing_spheres for method in GROWING_SPHERES_TARGETS},
+}
+
+
 def create_generator(
     name: str,
-    task,
+    task: ClassificationTask,
     generation_models: list | None = None,
     method_config: dict[str, object] | None = None,
-):
-    config = dict(method_config or {})
+) -> tuple[Generator, dict[str, object]]:
+    """The generator and per-call arguments for ``method_config``.
+
+    Keys a method does not read (calibration provenance such as
+    ``calibration_fingerprint``) stay in the recorded configuration only.
+    """
+
+    if name not in FACTORIES:
+        raise ValueError(f"Unknown method {name!r}")
     unsupported = unsupported_methods([name], task.model)
     if unsupported:
         raise UnsupportedModelError(
             f"{name} cannot explain a {getattr(task.model, 'model_type', '?')} "
             f"model: it {unsupported[name]}"
         )
-    if name == "kdtree":
-        return KDTreeNNCE(task), config
-    if name == "wachter":
-        return Wachter(task), {**WACHTER_DEFAULTS, **config}
-    if name == "rnce":
-        _check_implementation(config, "RNCE", RNCE_IMPLEMENTATION)
-        return RNCE(task), config
-    if name == "apas":
-        _check_implementation(config, "APAS", APAS_IMPLEMENTATION)
-        return (
-            APASAdapter(
-                task,
-                seed=int(task.training_data.seed or 0),
-                delta=_required_float_config(config, "delta"),
-                confidence=_float_config(config, "confidence", 0.999),
-                robustness_probability=_float_config(
-                    config, "robustness_probability", 0.995
-                ),
-                initial_margin=_float_config(config, "initial_margin", 0.01),
-                increment=_float_config(config, "increment", 0.2),
-                maximum_margin=_float_config(config, "maximum_margin", 20.0),
-                wall_time_seconds=_float_config(config, "wall_time_seconds", 30.0),
-            ),
-            config,
+    config = dict(method_config or {})
+    expected = IMPLEMENTATIONS.get(name)
+    implementation = config.pop("implementation", expected)
+    if implementation != expected:
+        raise ValueError(
+            f"Unsupported {name} implementation {implementation!r}; "
+            f"expected {expected!r}"
         )
-    if name == "rbr":
-        _check_implementation(config, "RBR", RBR_IMPLEMENTATION)
-        return (
-            RBRAdapter(
-                task,
-                seed=int(task.training_data.seed or 0),
-                num_counterfactuals=_int_config(config, "num_counterfactuals", 1_000),
-                num_samples=_int_config(config, "num_samples", 200),
-                perturb_radius_fraction=_float_config(
-                    config, "perturb_radius_fraction", 0.2
-                ),
-                delta_plus=_float_config(config, "delta_plus", 0.2),
-                sigma=_float_config(config, "sigma", 1.0),
-                epsilon_op=_float_config(config, "epsilon_op", 0.5),
-                epsilon_pe=_float_config(config, "epsilon_pe", 0.5),
-                maximum_iterations=_int_config(config, "maximum_iterations", 500),
-            ),
-            config,
-        )
-    if name == "roar_lime":
-        _check_implementation(config, "ROAR-LIME", ROAR_LIME_IMPLEMENTATION)
-        return (
-            RoarLimeAdapter(
-                task,
-                seed=int(task.training_data.seed or 0),
-                num_samples=_int_config(config, "num_samples", LIME_NUM_SAMPLES),
-                delta=_float_config(config, "delta", 0.1),
-                lambda_param=_float_config(config, "lambda_param", 0.01),
-                learning_rate=_float_config(config, "lr", 0.001),
-                loss_threshold=_float_config(config, "loss_threshold", 0.0001),
-                maximum_iterations=_int_config(config, "maximum_iterations", 20_000),
-            ),
-            config,
-        )
-    if name == "roar":
-        _check_implementation(config, "ROAR", ROAR_IMPLEMENTATION)
-        return (
-            RoarAdapter(
-                task,
-                delta=_float_config(config, "delta", 0.1),
-                lambda_param=_float_config(config, "lambda_param", 0.01),
-                learning_rate=_float_config(config, "lr", 0.001),
-                loss_threshold=_float_config(config, "loss_threshold", 0.0001),
-                maximum_iterations=_int_config(config, "maximum_iterations", 20_000),
-            ),
-            config,
-        )
-    if name == "trex":
-        _check_implementation(config, "T:Rex", TREX_IMPLEMENTATION)
-        config.pop("tau_calibration", None)
-        return (
-            TRexAdapter(
-                task,
-                seed=int(task.training_data.seed or 0),
-                variance=_float_config(config, "variance", 0.01),
-                stability_samples=_int_config(config, "stability_samples", 1_000),
-                tau_quantile=_float_config(config, "tau_quantile", 0.5),
-                step_size=_float_config(config, "step_size", 0.01),
-                max_steps=_int_config(config, "max_steps", 200),
-                trust_radius=_float_config(config, "trust_radius", 1.0),
-            ),
-            config,
-        )
-    if name in GROWING_SPHERES_TARGETS:
-        return (
-            GrowingSpheresAdapter(
-                task,
-                seed=int(task.training_data.seed or 0),
-                target_probability=_float_config(
-                    config, "target_probability", GROWING_SPHERES_TARGETS[name]
-                ),
-                n_search_samples=_int_config(config, "n_search_samples", 100),
-                p_norm=_int_config(config, "p_norm", 2),
-                step=_float_config(config, "step", 0.1),
-                max_iter=_int_config(config, "max_iter", 100),
-            ),
-            config,
-        )
-    if name in {"robx_balanced", "robx_robust"}:
-        if "tau" not in config:
-            raise ValueError(f"{name} requires a calibrated tau")
-        _check_implementation(config, "RobX", ROBX_IMPLEMENTATION)
-        config.pop("tau_quantile", None)
-        config.pop("tau_calibration", None)
-        config.pop("tau_calibration_metadata", None)
-
-        return (
-            RobXAdapter(
-                task,
-                seed=int(task.training_data.seed or 0),
-                variance=_float_config(config, "variance", 0.01),
-                tau=_required_float_config(config, "tau"),
-                stability_samples=_int_config(config, "stability_samples", 1_000),
-            ),
-            config,
-        )
-    if name == "betarce":
-        if generation_models is None:
-            raise ValueError("betarce requires a separate generation_models ensemble")
-        _check_implementation(config, "BetaRCE", BETARCE_IMPLEMENTATION)
-        model_space = config.pop(
-            "generation_model_space", "bootstrap_fixed_initialization_v2"
-        )
-        if model_space != "bootstrap_fixed_initialization_v2":
-            raise ValueError(f"Unsupported BetaRCE model space {model_space!r}")
-        return (
-            BetaRCEAdapter(
-                task,
-                generation_models,
-                seed=int(task.training_data.seed or 0),
-                delta=_float_config(config, "delta", 0.9),
-                alpha=_float_config(config, "alpha", 0.95),
-                generation_ensemble_n=_int_config(config, "generation_ensemble_n", 32),
-                gs_n_search_samples=_int_config(config, "gs_n_search_samples", 100),
-                gs_p_norm=_int_config(config, "gs_p_norm", 2),
-                gs_step=_float_config(config, "gs_step", 0.1),
-                base_gs_max_iter=_int_config(config, "base_gs_max_iter", 100),
-                gs_max_iter=_int_config(config, "gs_max_iter", 100),
-            ),
-            config,
-        )
-    raise ValueError(f"Unknown method {name!r}")
+    return FACTORIES[name](task, config, generation_models)
 
 
 def generate_counterfactuals(
@@ -306,7 +309,7 @@ def generate_counterfactuals(
                 projected = task.schema.project(ce.to_numpy(), factual.to_numpy())
                 projection_changed = bool(
                     np.abs(projected - ce.to_numpy()).max(initial=0.0)
-                    > SPARSITY_TOLERANCE
+                    > CHANGE_TOLERANCE
                 )
                 ce = pd.Series(projected, index=ce.index, name=ce.name)
             base_valid = finite and task.model.predict_single(ce) == 1
@@ -315,11 +318,11 @@ def generate_counterfactuals(
                 if base_valid
                 else ("base_invalid" if finite else "non_finite")
             )
-            method_metadata = getattr(generator, "last_metadata", {})
+            method_metadata = generator.last_metadata
         except NoCounterfactualFound:
             ce = pd.Series(np.nan, index=factual.index, dtype=float)
             base_valid = False
-            method_metadata = getattr(generator, "last_metadata", {})
+            method_metadata = generator.last_metadata
             status = "no_counterfactual"
         except Exception as exception:  # noqa: BLE001 - generator failure is a benchmark outcome
             error = f"{type(exception).__name__}: {exception}"

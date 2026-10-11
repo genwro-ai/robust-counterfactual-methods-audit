@@ -18,7 +18,6 @@ from robustness_benchmark.core.model_bank import (
 from robustness_benchmark.core.model_specs import spec_from_manifest
 from robustness_benchmark.core.protocol import (
     EVALUATION_FACTUALS_SEED_OFFSET,
-    STABILITY_TAU_SEED_OFFSET,
     TUNING_FACTUALS_SEED_OFFSET,
 )
 from robustness_benchmark.core.provenance import (
@@ -36,11 +35,8 @@ from robustness_benchmark.evaluation.plausibility import (
 from robustness_benchmark.evaluation.robustness import evaluate_survival
 from robustness_benchmark.methods.calibration import (
     RNCE_UPDATE_CALIBRATION,
-    apas_method_config,
     apas_update_calibration,
-    load_or_create_calibration,
-    rnce_method_config,
-    summarize_calibration,
+    calibrate_seed_configs,
 )
 from robustness_benchmark.methods.configuration import (
     LOCKED_CONFIGS,
@@ -49,14 +45,9 @@ from robustness_benchmark.methods.configuration import (
     unsupported_methods,
 )
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
-from robustness_benchmark.methods.robx import (
-    tau_from_stability_quantile,
-    training_target_stability_scores,
-)
 
 BENCHMARK_PROTOCOL_VERSION = "full_benchmark_v11_gower_distance"
 TUNING_PROTOCOL_VERSION = "validation_v3_gower_cost"
-ADAPTIVE_ROBX_METHODS = ("robx_balanced", "robx_robust")
 
 
 def parse_args() -> argparse.Namespace:
@@ -209,50 +200,6 @@ def tuning_config_is_current(method: str, config: object) -> bool:
     if grid is not None:
         return config in grid
     return config == LOCKED_CONFIGS.get(method, {})
-
-
-def resolve_robx_seed_configs(
-    configs: dict[str, dict[str, object]],
-    methods: list[str],
-    base_model,
-    X_train: pd.DataFrame,
-    base_seed: int,
-) -> dict[str, dict[str, object]]:
-    """Resolve dataset- and model-dependent RobX stability thresholds."""
-
-    resolved = {method: dict(configs[method]) for method in methods}
-    adaptive = [method for method in methods if method in ADAPTIVE_ROBX_METHODS]
-    if not adaptive:
-        return resolved
-
-    reference = resolved[adaptive[0]]
-    variance = float(reference["variance"])
-    stability_samples = int(reference["stability_samples"])
-
-    def target_probability(values: np.ndarray) -> np.ndarray:
-        return base_model.predict_proba(values).iloc[:, 1].to_numpy()
-
-    scores, target_training_points = training_target_stability_scores(
-        X_train.to_numpy(),
-        target_probability,
-        variance=variance,
-        N=stability_samples,
-        seed=base_seed + STABILITY_TAU_SEED_OFFSET,
-    )
-    for method in adaptive:
-        config = resolved[method]
-        if float(config["variance"]) != variance:
-            raise ValueError("Adaptive RobX methods must share one variance")
-        if int(config["stability_samples"]) != stability_samples:
-            raise ValueError("Adaptive RobX methods must share one sample count")
-        tau, metadata = tau_from_stability_quantile(
-            scores,
-            quantile=float(config["tau_quantile"]),
-            target_training_points=target_training_points,
-        )
-        config["tau"] = tau
-        config["tau_calibration_metadata"] = metadata
-    return resolved
 
 
 def tuning_protocol_is_reusable(
@@ -603,17 +550,6 @@ def main() -> None:
     methods = [method for method in args.methods if method not in skipped_methods]
     if not methods:
         raise ValueError(f"No requested method supports a {spec.model_type} model")
-    if "apas" in methods:
-        if args.apas_calibration_replicates < 1:
-            raise ValueError("APAS calibration replicates must be positive")
-        if args.apas_update_epochs < 1:
-            raise ValueError("APAS update epochs must be positive")
-        if args.apas_update_batch_size < 1:
-            raise ValueError("APAS update batch size must be positive")
-        if args.apas_update_learning_rate <= 0:
-            raise ValueError("APAS update learning rate must be positive")
-        if args.apas_update_weight_decay < 0:
-            raise ValueError("APAS update weight decay cannot be negative")
     args.output.mkdir(parents=True, exist_ok=True)
     bank_fingerprint = model_bank_fingerprint(args.bank)
     available_base_seeds = [int(seed) for seed in bank_manifest["base_seeds"]]
@@ -703,18 +639,15 @@ def main() -> None:
         raise ValueError(f"Base seeds are not in the model bank: {unknown_seeds}")
     selected_base_model_ids: list[str] = []
     calibration_summaries: list[dict[str, object]] = []
-    calibrations = {
-        "apas": (
-            apas_update_calibration(
-                args.apas_calibration_replicates,
-                args.apas_update_epochs,
-                args.apas_update_batch_size,
-                args.apas_update_learning_rate,
-                args.apas_update_weight_decay,
-            ),
-            apas_method_config,
+    protocols = {
+        "apas": apas_update_calibration(
+            args.apas_calibration_replicates,
+            args.apas_update_epochs,
+            args.apas_update_batch_size,
+            args.apas_update_learning_rate,
+            args.apas_update_weight_decay,
         ),
-        "rnce": (RNCE_UPDATE_CALIBRATION, rnce_method_config),
+        "rnce": RNCE_UPDATE_CALIBRATION,
     }
     for base_seed in selected_base_seeds:
         base_id, base_model, changes = load_model_bank(args.bank, int(base_seed))
@@ -735,32 +668,19 @@ def main() -> None:
         plausibility = PlausibilityReference(
             data.X_train, base_model, schema=data.feature_schema
         )
-        seed_configs = resolve_robx_seed_configs(
+        # Radii and thresholds calibrated on this base model only.
+        seed_configs, seed_calibrations = calibrate_seed_configs(
             configs,
             methods,
-            base_model,
-            data.X_train,
-            int(base_seed),
+            protocols=protocols,
+            output=args.output,
+            data=data,
+            base_model=base_model,
+            base_model_id=base_id,
+            base_seed=int(base_seed),
+            bank_fingerprint=bank_fingerprint,
         )
-        # APAS and RNCE radii come from update replicas of this base model.
-        for method, (protocol, method_config) in calibrations.items():
-            if method not in methods:
-                continue
-            calibration = load_or_create_calibration(
-                protocol,
-                output=args.output,
-                data=data,
-                base_model=base_model,
-                base_model_id=base_id,
-                base_seed=int(base_seed),
-                bank_fingerprint=bank_fingerprint,
-            )
-            seed_configs[method] = method_config(configs[method], calibration)
-            calibration_summaries.append(
-                summarize_calibration(
-                    calibration, base_model_id=base_id, base_seed=int(base_seed)
-                )
-            )
+        calibration_summaries.extend(seed_calibrations)
         ensemble = (
             load_generation_ensemble(
                 bank=args.bank,
