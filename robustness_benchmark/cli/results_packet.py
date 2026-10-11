@@ -8,11 +8,33 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
+from matplotlib.lines import Line2D
 
 from robustness_benchmark.evaluation.aggregate import (
     aggregate_survival,
     generation_metrics,
+)
+from robustness_benchmark.evaluation.figure_style import (
+    AXIS,
+    EMPTY,
+    INK,
+    MARGIN_LABEL,
+    MUTED,
+    ROBUSTNESS_CMAP,
+    SECONDARY,
+    SMALL_SIZE,
+    SURFACE,
+    legend_methods,
+    mark_method_ticks,
+    method_handle,
+    method_style,
+    panel_title,
+    save_figure,
+    scatter_method,
+    style_axis,
+    styled,
 )
 from robustness_benchmark.evaluation.plausibility import plausibility_summary
 from robustness_benchmark.evaluation.rank_tests import (
@@ -22,26 +44,6 @@ from robustness_benchmark.evaluation.rank_tests import (
     rank_test,
 )
 
-plt.rcParams.update({"pdf.fonttype": 42, "ps.fonttype": 42})
-
-PAPER_INK = "#172033"
-PAPER_MUTED = "#657089"
-PAPER_GRID = "#DDE3EC"
-PAPER_FACE = "#FBFCFF"
-PAPER_METHOD_COLORS = {
-    "wachter": "#64748B",
-    "apas": "#E76F51",
-    "rbr": "#2A9D8F",
-    "kdtree": "#4C78A8",
-    "rnce": "#8E5BB7",
-    "betarce": "#E9A23B",
-    "roar_lime": "#D45087",
-    "robx_balanced": "#2457C5",
-    "robx_robust": "#19A7A0",
-    "trex": "#1D3557",
-    "roar": "#9B2226",
-    "growing_spheres": "#94A3B8",
-}
 MARGIN_METHODS = (
     "growing_spheres",
     "gs_margin_60",
@@ -79,48 +81,6 @@ METHOD_ORDER = (
     "roar",
     *MARGIN_METHODS,
 )
-PAPER_METHOD_MARKERS = dict(
-    zip(
-        METHOD_ORDER,
-        (
-            "o",
-            "s",
-            "^",
-            "v",
-            "D",
-            "P",
-            "X",
-            "<",
-            ">",
-            "h",
-            "*",
-            ".",
-            ".",
-            ".",
-            ".",
-            ".",
-        ),
-        strict=True,
-    )
-)
-METHOD_LABELS = {
-    "wachter": "Wachter",
-    "apas": "APΔS",
-    "rbr": "RBR",
-    "kdtree": "KD-tree",
-    "rnce": "RNCE",
-    "betarce": "BetaRCE",
-    "roar_lime": "ROAR-LIME",
-    "robx_balanced": "RobX balanced",
-    "robx_robust": "RobX robust-first",
-    "trex": "T:Rex",
-    "roar": "ROAR",
-    "growing_spheres": "Growing spheres",
-    **{
-        method: f"GS margin 0.{method.removeprefix('gs_margin_')}"
-        for method in MARGIN_BASELINES
-    },
-}
 FAMILY_ORDER = (
     "architecture",
     "bootstrap",
@@ -212,7 +172,7 @@ def ordered(values, order: tuple[str, ...]) -> list[str]:
 
 
 def method_label(method: str) -> str:
-    return METHOD_LABELS.get(method, method)
+    return method_style(method).label
 
 
 def result_root(artifacts: Path, dataset: str, model_type: str) -> Path:
@@ -855,6 +815,7 @@ def rank_diagram_stem(analysis: str, scope: str, change_family: str) -> str:
     return f"critical_difference_{analysis}_{scope}{suffix}"
 
 
+@styled
 def plot_rank_diagrams(output: Path, results: dict[RankKey, RankTestResult]) -> None:
     analysis_labels = {analysis.name: analysis.label for analysis in RANK_ANALYSES}
     for (analysis, scope, change_family), result in results.items():
@@ -867,20 +828,8 @@ def plot_rank_diagrams(output: Path, results: dict[RankKey, RankTestResult]) -> 
             result,
             title=f"{SCOPE_LABELS[scope]}: {analysis_labels[analysis]}{family_label} "
             f"(N = {result.n_blocks}, Friedman p = {result.p_value:.2g})",
-            labels=METHOD_LABELS,
-            colors=PAPER_METHOD_COLORS,
-            ink=PAPER_INK,
-            muted=PAPER_MUTED,
         )
-        for suffix, options in (("png", {"dpi": 300}), ("pdf", {})):
-            figure.savefig(
-                output
-                / f"{rank_diagram_stem(analysis, scope, change_family)}.{suffix}",
-                bbox_inches="tight",
-                pad_inches=0.06,
-                **options,
-            )
-        plt.close(figure)
+        save_figure(figure, output / rank_diagram_stem(analysis, scope, change_family))
 
 
 def model_datasets(frame: pd.DataFrame, model_type: str) -> list[tuple[str, str]]:
@@ -890,17 +839,32 @@ def model_datasets(frame: pd.DataFrame, model_type: str) -> list[tuple[str, str]
     ]
 
 
-def panel_axes(count: int, width: float, row_height: float, **kwargs):
-    """Two panels per row; unused trailing axes are hidden."""
+def panel_axes(count: int, row_height: float, key_height: float = 0.55):
+    """Two panels per row plus an empty key axis for a legend or colour bar.
+
+    The key takes the spare cell when ``count`` is odd, else a row beneath.
+    """
 
     columns = min(2, count)
     rows = math.ceil(count / columns)
-    figure, axes = plt.subplots(
-        rows, columns, figsize=(width, row_height * rows), squeeze=False, **kwargs
+    spare = rows * columns > count
+    heights = [row_height] * rows + ([] if spare else [key_height])
+    figure = plt.figure(figsize=(7.2, sum(heights)), layout="constrained")
+    grid = figure.add_gridspec(len(heights), columns, height_ratios=heights)
+    axes = [
+        figure.add_subplot(grid[index // columns, index % columns])
+        for index in range(count)
+    ]
+    key = figure.add_subplot(grid[rows - 1, 1] if spare else grid[rows, :])
+    key.axis("off")
+    return figure, axes, key
+
+
+def finish_panels(figure, model_type: str, title: str, path: Path) -> None:
+    figure.suptitle(
+        f"{MODEL_TYPES[model_type]}: {title}", x=0.01, ha="left", fontweight="bold"
     )
-    for axis in axes.flat[count:]:
-        axis.set_visible(False)
-    return figure, list(axes.flat[:count])
+    save_figure(figure, path)
 
 
 def family_matrix(
@@ -929,7 +893,7 @@ def family_matrix(
     return matrix, not_run
 
 
-def mark_not_run(axis, matrix: pd.DataFrame, not_run: list[str], **text_kwargs) -> None:
+def mark_not_run(axis, matrix: pd.DataFrame, not_run: list[str]) -> None:
     for row, method in enumerate(matrix.index):
         if method in not_run:
             for column in range(matrix.shape[1]):
@@ -939,170 +903,76 @@ def mark_not_run(axis, matrix: pd.DataFrame, not_run: list[str], **text_kwargs) 
                     "n/a",
                     ha="center",
                     va="center",
-                    color=PAPER_MUTED,
-                    **text_kwargs,
+                    color=MUTED,
+                    fontsize=SMALL_SIZE - 0.5,
                 )
 
 
+HEATMAP_FAMILY_LABELS = {
+    **FAMILY_LABELS,
+    "training_config": "Train config",
+    "data_addition": "Data add.",
+    "bounded_parameter": "Param. perturb.",
+    "incremental_update": "Incr. update",
+}
+
+
+@styled
 def plot_family_heatmaps(output: Path, family: pd.DataFrame, model_type: str) -> None:
-    sns.set_theme(style="white", context="paper", font_scale=1.05)
+    """Empirical robustness by method and change family, one panel per dataset.
+
+    Grey cells have no value: n/a where the model class cannot run the method.
+    """
+
     datasets = model_datasets(family, model_type)
-    figure, axes = panel_axes(len(datasets), 15.8, 5.6)
-    color_axis = figure.add_axes((0.925, 0.18, 0.015, 0.64))
+    figure, axes, key = panel_axes(len(datasets), 2.75)
     for index, (dataset, dataset_label) in enumerate(datasets):
         axis = axes[index]
         matrix, not_run = family_matrix(family, dataset, model_type)
         sns.heatmap(
-            100
-            * matrix.rename(
-                index=method_label,
-                columns=lambda value: FAMILY_LABELS.get(value, value),
-            ),
+            100 * matrix.rename(columns=HEATMAP_FAMILY_LABELS),
             ax=axis,
             annot=True,
+            annot_kws={"fontsize": SMALL_SIZE},
             fmt=".0f",
-            cmap="viridis",
+            cmap=ROBUSTNESS_CMAP,
             vmin=0,
             vmax=100,
-            linewidths=0.4,
-            linecolor="white",
-            cbar=index == 0,
-            cbar_ax=color_axis if index == 0 else None,
-            cbar_kws={"label": "Empirical robustness (%)"},
+            linewidths=1,
+            linecolor=SURFACE,
+            cbar=False,
         )
-        mark_not_run(axis, matrix, not_run, fontsize=8)
-        axis.set_title(dataset_label, fontweight="bold")
-        axis.set_xlabel("")
-        axis.set_ylabel("")
-        axis.tick_params(axis="x", rotation=35)
-        axis.tick_params(axis="y", rotation=0)
-    figure.suptitle(
-        f"{MODEL_TYPES[model_type]}: empirical robustness depends on how the model changes",
-        fontsize=17,
-        fontweight="bold",
-    )
-    figure.subplots_adjust(
-        left=0.075,
-        right=0.90,
-        bottom=0.07,
-        top=0.90,
-        hspace=0.42,
-        wspace=0.24,
-    )
-    figure.savefig(output / f"robustness_by_change_family_{model_type}.png", dpi=220)
-    figure.savefig(output / f"robustness_by_change_family_{model_type}.pdf")
-    plt.close(figure)
-
-
-def plot_paper_family_heatmaps(
-    output: Path, family: pd.DataFrame, model_type: str
-) -> None:
-    sns.set_theme(style="white", context="paper", font="DejaVu Sans")
-    cmap = LinearSegmentedColormap.from_list(
-        "midnight_sun",
-        ("#111A3A", "#3B2D78", "#7B4AA8", "#C35C9A", "#F09A6A", "#F8E7A1"),
-    )
-    datasets = model_datasets(family, model_type)
-    figure, axes = panel_axes(len(datasets), 7.5, 2.68, facecolor="white")
-    height = figure.get_figheight()  # margins are fixed in inches for any panel count
-    color_axis = figure.add_axes((0.33, 0.35 / height, 0.40, 0.1 / height))
-    paper_family_labels = {
-        **FAMILY_LABELS,
-        "training_config": "Train config",
-        "data_addition": "Data add.",
-        "bounded_parameter": "Param. perturb.",
-        "incremental_update": "Incr. update",
-    }
-    for index, (dataset, dataset_label) in enumerate(datasets):
-        axis = axes[index]
-        matrix, not_run = family_matrix(family, dataset, model_type)
-        sns.heatmap(
-            100
-            * matrix.rename(
-                index=method_label,
-                columns=lambda value: paper_family_labels.get(value, value),
-            ),
-            ax=axis,
-            annot=True,
-            annot_kws={"fontsize": 7.0, "fontweight": "bold"},
-            fmt=".0f",
-            cmap=cmap,
-            vmin=0,
-            vmax=100,
-            linewidths=0.7,
-            linecolor="white",
-            cbar=index == 0,
-            cbar_ax=color_axis if index == 0 else None,
-            cbar_kws={
-                "label": "Empirical robustness (%)",
-                "orientation": "horizontal",
-                "ticks": (0, 25, 50, 75, 100),
-            },
+        axis.set_facecolor(EMPTY)
+        mark_not_run(axis, matrix, not_run)
+        axis.set(xlabel="", ylabel="")
+        axis.tick_params(length=0)
+        plt.setp(
+            axis.get_xticklabels(), rotation=35, ha="right", rotation_mode="anchor"
         )
-        annotation_values = (100 * matrix).to_numpy().ravel()
-        annotation_values = annotation_values[np.isfinite(annotation_values)]
-        for text_item, value in zip(axis.texts, annotation_values, strict=True):
-            text_item.set_color("white" if value < 76 else PAPER_INK)
-        mark_not_run(axis, matrix, not_run, fontsize=6.0)
-        axis.set_title(
-            dataset_label,
-            fontsize=9.2,
-            fontweight="bold",
-            color=PAPER_INK,
-            loc="left",
-            pad=6,
-        )
-        axis.set_xlabel("")
-        axis.set_ylabel("")
-        axis.tick_params(
-            axis="x", labelsize=6.6, labelcolor=PAPER_MUTED, rotation=32, pad=1
-        )
-        axis.tick_params(
-            axis="y", labelsize=6.8, labelcolor=PAPER_INK, rotation=0, pad=2
-        )
-        axis.text(
-            -0.17,
-            1.055,
-            chr(ord("A") + index),
-            transform=axis.transAxes,
-            fontsize=8,
-            fontweight="bold",
-            color="#C35C9A",
-            va="bottom",
-        )
-    color_axis.tick_params(labelsize=6.5, colors=PAPER_MUTED, length=2)
-    color_axis.xaxis.label.set_size(7.2)
-    color_axis.xaxis.label.set_color(PAPER_INK)
-    figure.suptitle(
-        f"{MODEL_TYPES[model_type]}: robustness profiles change with the "
-        "model-update mechanism",
-        x=0.11,
-        y=1 - 0.04 / height,
-        ha="left",
-        fontsize=10.2,
-        fontweight="bold",
-        color=PAPER_INK,
+        # rows are the same in every panel, so only the left column names them
+        if index % 2:
+            axis.set_yticklabels([])
+        else:
+            axis.set_yticklabels(
+                [method_label(method) for method in matrix.index], rotation=0
+            )
+            mark_method_ticks(axis, list(matrix.index))
+        panel_title(axis, index, dataset_label)
+    colour_bar = figure.colorbar(
+        ScalarMappable(Normalize(0, 100), ROBUSTNESS_CMAP),
+        cax=key.inset_axes((0.2, 0.55, 0.6, 0.12)),
+        orientation="horizontal",
+        ticks=(0, 25, 50, 75, 100),
     )
-    figure.subplots_adjust(
-        left=0.11,
-        right=0.985,
-        bottom=1.02 / height,
-        top=1 - 0.43 / height,
-        hspace=0.47,
-        wspace=0.44,
+    colour_bar.outline.set_visible(False)
+    colour_bar.ax.tick_params(length=2, color=AXIS)
+    colour_bar.set_label("Empirical robustness (%)")
+    finish_panels(
+        figure,
+        model_type,
+        "robustness profiles change with the model-update mechanism",
+        output / f"paper_robustness_by_change_family_{model_type}",
     )
-    figure.savefig(
-        output / f"paper_robustness_by_change_family_{model_type}.png",
-        dpi=300,
-        bbox_inches="tight",
-        pad_inches=0.06,
-    )
-    figure.savefig(
-        output / f"paper_robustness_by_change_family_{model_type}.pdf",
-        bbox_inches="tight",
-        pad_inches=0.06,
-    )
-    plt.close(figure)
 
 
 def tradeoff_point(
@@ -1113,8 +983,12 @@ def tradeoff_point(
     return (x, y) if np.isfinite(x) and np.isfinite(y) else None
 
 
+MARGIN_LINE = {"color": MUTED, "linestyle": "--", "linewidth": 1.0, "marker": "."}
+FRONTIER_LINE = {"color": AXIS, "linewidth": 1.2}
+
+
 def plot_margin_baseline(
-    axis, selected: pd.DataFrame, x_column: str = "mean_l1_robust_scale", **line_kwargs
+    axis, selected: pd.DataFrame, x_column: str = "mean_l1_robust_scale"
 ) -> list[tuple[float, float]]:
     """Draw the confidence-margin baselines as one dashed curve."""
 
@@ -1126,93 +1000,23 @@ def plot_margin_baseline(
     ]
     if points:
         x_values, y_values = zip(*points, strict=True)
-        axis.plot(
-            x_values,
-            y_values,
-            linestyle="--",
-            marker=".",
-            label="Confidence-margin baseline",
-            zorder=2,
-            **line_kwargs,
-        )
+        axis.plot(x_values, y_values, zorder=2, **MARGIN_LINE)
     return points
 
 
-def plot_tradeoff(output: Path, overall: pd.DataFrame, model_type: str) -> None:
-    sns.set_theme(style="whitegrid", context="paper", font_scale=1.05)
-    palette = dict(
-        zip(
-            METHOD_ORDER,
-            sns.color_palette("colorblind", n_colors=len(METHOD_ORDER)),
-            strict=True,
-        )
-    )
-    datasets = model_datasets(overall, model_type)
-    figure, axes = panel_axes(len(datasets), 13.8, 5.2, constrained_layout=True)
-    offsets = {
-        "breast_cancer": {
-            "robx_balanced": (4, -11),
-            "robx_robust": (4, 7),
-            "kdtree": (4, -11),
-            "rnce": (4, 7),
-            "betarce": (4, -10),
-        },
-        "diabetes": {
-            "robx_balanced": (4, 7),
-            "robx_robust": (4, 7),
-            "rnce": (4, -11),
-            "betarce": (4, 7),
-        },
-        "wine_quality": {
-            "robx_balanced": (4, 7),
-            "robx_robust": (4, 7),
-            "rnce": (4, -11),
-            "betarce": (4, 7),
-            "roar_lime": (4, -11),
-        },
-        "heloc": {
-            "robx_balanced": (4, 7),
-            "robx_robust": (4, 7),
-            "betarce": (4, 7),
-            "rnce": (4, -11),
-        },
-    }
-    for index, (dataset, dataset_label) in enumerate(datasets):
-        axis = axes[index]
-        selected = overall[
-            overall["dataset"].eq(dataset) & overall["model_type"].eq(model_type)
-        ].set_index("method")
-        plot_margin_baseline(axis, selected, color="#94A3B8")
-        for method in ordered(selected.index, METHOD_ORDER):
-            point = tradeoff_point(selected, method)
-            if method in MARGIN_METHODS or point is None:
-                continue
-            x, y = point
-            axis.scatter(x, y, s=55, color=palette.get(method, "black"), zorder=3)
-            axis.annotate(
-                method_label(method),
-                (x, y),
-                xytext=offsets.get(dataset, {}).get(method, (4, 4)),
-                textcoords="offset points",
-                fontsize=8,
-            )
-        axis.set_title(dataset_label, fontweight="bold")
-        axis.set_xlabel("Mean scaled L1 distance")
-        axis.set_ylabel("Empirical robustness (%)")
-        axis.margins(x=0.08)
-        axis.set_ylim(-3, 108)
-    figure.suptitle(
-        f"{MODEL_TYPES[model_type]}: robustness must be interpreted together "
-        "with proximity and coverage",
-        fontsize=17,
-        fontweight="bold",
-    )
-    figure.savefig(output / f"robustness_proximity_tradeoff_{model_type}.png", dpi=220)
-    figure.savefig(output / f"robustness_proximity_tradeoff_{model_type}.pdf")
-    plt.close(figure)
+def pareto_frontier(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Points no other point beats on both lower x and higher y."""
+
+    frontier, best_y = [], -np.inf
+    for x, y in sorted(points):
+        if y > best_y:
+            frontier.append((x, y))
+            best_y = y
+    return frontier
 
 
-def plot_paper_tradeoff(
+@styled
+def plot_tradeoff(
     output: Path,
     overall: pd.DataFrame,
     model_type: str,
@@ -1224,134 +1028,52 @@ def plot_paper_tradeoff(
 ) -> None:
     """Robustness against a lower-is-better ``x_column``, one panel per dataset."""
 
-    sns.set_theme(style="white", context="paper", font="DejaVu Sans")
     datasets = model_datasets(overall, model_type)
-    figure, axes = panel_axes(len(datasets), 7.2, 2.72, facecolor="white")
-    height = figure.get_figheight()
+    figure, axes, key = panel_axes(len(datasets), 2.6)
+    drawn = set()
     for index, (dataset, dataset_label) in enumerate(datasets):
         axis = axes[index]
-        axis.set_facecolor(PAPER_FACE)
+        style_axis(axis)
         selected = overall[
             overall["dataset"].eq(dataset) & overall["model_type"].eq(model_type)
         ].set_index("method")
-        margin_points = plot_margin_baseline(
-            axis, selected, x_column, color="#94A3B8", linewidth=1.0
-        )
+        margin_points = plot_margin_baseline(axis, selected, x_column)
         points = []
         for method in ordered(selected.index, METHOD_ORDER):
             point = tradeoff_point(selected, method, x_column)
-            if method in MARGIN_METHODS or point is None:
+            if method in MARGIN_BASELINES or point is None:
                 continue
-            x, y = point
-            points.append((x, y))
-            axis.scatter(
-                x,
-                y,
-                s=52,
-                color=PAPER_METHOD_COLORS.get(method, PAPER_INK),
-                marker=PAPER_METHOD_MARKERS.get(method, "o"),
-                edgecolor="white",
-                linewidth=0.8,
-                label=method_label(method),
-                zorder=4,
-            )
+            points.append(point)
+            drawn.add(method)
+            scatter_method(axis, method, *point, zorder=4)
+        if frontier := pareto_frontier(points):
+            axis.plot(*zip(*frontier, strict=True), zorder=3, **FRONTIER_LINE)
 
-        frontier = []
-        best_y = -np.inf
-        for x, y in sorted(points):
-            if y > best_y:
-                frontier.append((x, y))
-                best_y = y
-        if frontier:
-            frontier_x, frontier_y = zip(*frontier, strict=True)
-            axis.plot(
-                frontier_x,
-                frontier_y,
-                color="#AAB4C5",
-                linewidth=1.2,
-                zorder=2,
-            )
-
-        all_points = points + margin_points
-        x_values = np.array([point[0] for point in all_points])
-        x_padding = max(0.05, 0.08 * float(np.ptp(x_values)))
+        all_points = np.array(points + margin_points)
+        x_padding = max(0.05, 0.08 * float(np.ptp(all_points[:, 0])))
         axis.set_xlim(
-            max(0, float(x_values.min()) - x_padding), x_values.max() + x_padding
+            max(0, all_points[:, 0].min() - x_padding),
+            all_points[:, 0].max() + x_padding,
         )
-        axis.set_ylim(min(43, min(point[1] for point in all_points) - 3), 102.5)
-        axis.set_yticks((50, 60, 70, 80, 90, 100))
-        axis.set_title(
-            dataset_label,
-            fontsize=9.2,
-            fontweight="bold",
-            color=PAPER_INK,
-            loc="left",
-            pad=7,
-        )
-        axis.set_xlabel(x_label, fontsize=7.1)
-        axis.set_ylabel("Empirical robustness (%)", fontsize=7.1)
-        axis.tick_params(labelsize=6.7, colors=PAPER_MUTED, length=2.5)
-        axis.grid(True, color=PAPER_GRID, linewidth=0.7, alpha=0.85)
-        axis.set_axisbelow(True)
-        for spine in axis.spines.values():
-            spine.set_color("#C9D1DE")
-            spine.set_linewidth(0.7)
-        axis.text(
-            -0.15,
-            1.055,
-            chr(ord("A") + index),
-            transform=axis.transAxes,
-            fontsize=8,
-            fontweight="bold",
-            color="#2457C5",
-            va="bottom",
-        )
-    figure.subplots_adjust(
-        left=0.10,
-        right=0.985,
-        bottom=1.03 / height,
-        top=1 - 0.54 / height,
-        hspace=0.45,
-        wspace=0.29,
-    )
-    handles, labels = axes[0].get_legend_handles_labels()
-    figure.legend(
-        handles,
-        labels,
-        loc="lower center",
-        ncol=5,
-        frameon=False,
-        fontsize=7,
-        columnspacing=1.1,
+        axis.set_ylim(min(45, all_points[:, 1].min() - 3), 102.5)
+        axis.set_xlabel(x_label)
+        axis.set_ylabel("Empirical robustness (%)")
+        panel_title(axis, index, dataset_label)
+    key.legend(
+        handles=[method_handle(method) for method in legend_methods(drawn)]
+        + [
+            Line2D([], [], label=MARGIN_LABEL, **MARGIN_LINE),
+            Line2D([], [], label="Pareto frontier", **FRONTIER_LINE),
+        ],
+        loc="center",
+        ncol=2 if len(datasets) % 2 else 5,
+        columnspacing=1.2,
         handletextpad=0.4,
-        labelcolor=PAPER_INK,
     )
-    figure.suptitle(
-        f"{MODEL_TYPES[model_type]}: {title}",
-        x=0.10,
-        y=1 - 0.065 / height,
-        ha="left",
-        fontsize=10.2,
-        fontweight="bold",
-        color=PAPER_INK,
-    )
-    figure.savefig(
-        output / f"{stem}_{model_type}.png",
-        dpi=300,
-        bbox_inches="tight",
-        pad_inches=0.06,
-    )
-    figure.savefig(
-        output / f"{stem}_{model_type}.pdf",
-        bbox_inches="tight",
-        pad_inches=0.06,
-    )
-    plt.close(figure)
+    finish_panels(figure, model_type, title, output / f"{stem}_{model_type}")
 
 
-def plot_paper_plausibility(
-    output: Path, overall: pd.DataFrame, model_type: str
-) -> None:
+def plot_plausibility(output: Path, overall: pd.DataFrame, model_type: str) -> None:
     """Robustness against distance to the target-class data.
 
     Runs that predate the plausibility metrics have no values and are skipped.
@@ -1366,63 +1088,86 @@ def plot_paper_plausibility(
     recorded = recorded.dropna(subset=[x_column, "changed_validity_given_base_valid"])
     if not recorded["model_type"].eq(model_type).any():
         return
-    plot_paper_tradeoff(
+    plot_tradeoff(
         output,
         recorded,
         model_type,
         x_column=x_column,
-        x_label=r"Relative kNN distance to target-class data  $\leftarrow$ more plausible",
+        x_label=r"Relative kNN distance  $\leftarrow$ more plausible",
         title="robustness and plausibility",
         stem="paper_robustness_plausibility",
     )
 
 
+DECOMPOSITION_METRICS = (
+    ("generation_coverage", "Coverage", {"marker": "o", "color": SURFACE}),
+    ("validity_given_generated", "Base validity", {"marker": "s", "color": MUTED}),
+    (
+        "changed_validity_given_base_valid",
+        "Empirical robustness",
+        {"marker": "D", "color": INK},
+    ),
+)
+
+
+@styled
 def plot_metric_decomposition(
     output: Path, overall: pd.DataFrame, model_type: str
 ) -> None:
-    sns.set_theme(style="whitegrid", context="paper", font_scale=1.05)
-    metrics = (
-        ("generation_coverage", "Coverage", "o"),
-        ("validity_given_generated", "Base validity", "s"),
-        ("changed_validity_given_base_valid", "Empirical robustness", "D"),
-    )
-    colors = sns.color_palette("colorblind", n_colors=len(metrics))
+    """Coverage, base validity, and robustness per method, one panel per dataset."""
+
     datasets = model_datasets(overall, model_type)
-    figure, axes = panel_axes(len(datasets), 13.6, 5.1, constrained_layout=True)
+    methods = ordered(
+        overall.loc[overall["model_type"].eq(model_type), "method"], METHOD_ORDER
+    )
+    rows = np.arange(len(methods))
+    figure, axes, key = panel_axes(len(datasets), 2.75)
     for index, (dataset, dataset_label) in enumerate(datasets):
         axis = axes[index]
-        selected = overall[
-            overall["dataset"].eq(dataset) & overall["model_type"].eq(model_type)
-        ].set_index("method")
-        methods = ordered(selected.index, METHOD_ORDER)
-        y_positions = np.arange(len(methods))
-        for (column, label, marker), color in zip(metrics, colors, strict=True):
-            values = 100 * selected.loc[methods, column].to_numpy(dtype=float)
+        style_axis(axis, grid="x")
+        selected = (
+            overall[
+                overall["dataset"].eq(dataset) & overall["model_type"].eq(model_type)
+            ]
+            .set_index("method")
+            .reindex(methods)
+        )
+        values = 100 * selected[[column for column, *_ in DECOMPOSITION_METRICS]]
+        axis.hlines(
+            rows, values.min(axis=1), values.max(axis=1), color=AXIS, linewidth=1.0
+        )
+        for column, label, look in DECOMPOSITION_METRICS:
             axis.scatter(
-                values,
-                y_positions,
+                values[column],
+                rows,
+                s=22,
+                edgecolor=SECONDARY,
+                linewidth=0.7,
                 label=label,
-                marker=marker,
-                color=color,
-                s=42,
                 zorder=3,
+                **look,
             )
-        axis.set_yticks(y_positions, [method_label(method) for method in methods])
-        axis.invert_yaxis()
+        axis.set_yticks(rows, [])
+        axis.tick_params(axis="y", length=0)
+        if index % 2 == 0:  # rows are shared, so only the left column names them
+            axis.set_yticklabels([method_label(method) for method in methods])
+            mark_method_ticks(axis, methods)
+        axis.set_ylim(len(methods) - 0.5, -0.5)
         axis.set_xlim(-3, 103)
         axis.set_xlabel("Rate (%)")
-        axis.set_title(dataset_label, fontweight="bold")
-        if index == 0:
-            axis.legend(loc="lower left", frameon=False, fontsize=8.5)
-    figure.suptitle(
-        f"{MODEL_TYPES[model_type]}: coverage, validity, and robustness answer "
-        "different questions",
-        fontsize=17,
-        fontweight="bold",
+        axis.spines["left"].set_visible(False)
+        panel_title(axis, index, dataset_label)
+    key.legend(
+        *axes[0].get_legend_handles_labels(),
+        loc="center",
+        ncol=1 if len(datasets) % 2 else 3,
     )
-    figure.savefig(output / f"metric_decomposition_{model_type}.png", dpi=220)
-    figure.savefig(output / f"metric_decomposition_{model_type}.pdf")
-    plt.close(figure)
+    finish_panels(
+        figure,
+        model_type,
+        "coverage, validity, and robustness answer different questions",
+        output / f"paper_metric_decomposition_{model_type}",
+    )
 
 
 def protocol_lines(overall: pd.DataFrame, family: pd.DataFrame) -> list[str]:
@@ -1533,11 +1278,11 @@ def write_brief(
     )
     figures = "\n\n".join(
         f"![{MODEL_TYPES[model_type]}: robustness by change family]"
-        f"(robustness_by_change_family_{model_type}.png)\n\n"
+        f"(paper_robustness_by_change_family_{model_type}.png)\n\n"
         f"![{MODEL_TYPES[model_type]}: coverage, validity, and robustness]"
-        f"(metric_decomposition_{model_type}.png)\n\n"
+        f"(paper_metric_decomposition_{model_type}.png)\n\n"
         f"![{MODEL_TYPES[model_type]}: robustness and proximity]"
-        f"(robustness_proximity_tradeoff_{model_type}.png)"
+        f"(paper_robustness_proximity_tradeoff_{model_type}.png)"
         + (
             f"\n\n![{MODEL_TYPES[model_type]}: robustness and plausibility]"
             f"(paper_robustness_plausibility_{model_type}.png)"
@@ -1611,10 +1356,8 @@ def main() -> None:
     plot_rank_diagrams(args.output, rank_results)
     for model_type in ordered(overall["model_type"], tuple(MODEL_TYPES)):
         plot_family_heatmaps(args.output, family, model_type)
-        plot_paper_family_heatmaps(args.output, family, model_type)
         plot_tradeoff(args.output, overall, model_type)
-        plot_paper_tradeoff(args.output, overall, model_type)
-        plot_paper_plausibility(args.output, overall, model_type)
+        plot_plausibility(args.output, overall, model_type)
         plot_metric_decomposition(args.output, overall, model_type)
     write_brief(args.output, overall, family, cross_class, rank_tests)
 

@@ -1,9 +1,12 @@
 import json
+import re
 
 import numpy as np
 import pandas as pd
 import pytest
+from matplotlib.colors import to_hex
 
+from robustness_benchmark.cli import results_packet
 from robustness_benchmark.cli.results_packet import (
     ALL_FAMILIES,
     DATASETS,
@@ -16,15 +19,21 @@ from robustness_benchmark.cli.results_packet import (
     family_matrix,
     format_column,
     method_availability,
-    plot_paper_family_heatmaps,
-    plot_paper_plausibility,
-    plot_paper_tradeoff,
+    plot_family_heatmaps,
+    plot_metric_decomposition,
+    plot_plausibility,
     plot_rank_diagrams,
+    plot_tradeoff,
     rank_diagram_stem,
     rank_test_table,
     run_rank_tests,
     seed_summary,
     write_brief,
+)
+from robustness_benchmark.evaluation.figure_style import (
+    CATEGORICAL_HUES,
+    METHOD_STYLES,
+    method_style,
 )
 
 XGBOOST_NOT_RUN = {"wachter", "apas", "rnce", "trex", "roar"}
@@ -102,7 +111,7 @@ def test_paper_heatmap_handles_undefined_and_unavailable_cells(tmp_path):
     family.loc[undefined, "changed_validity_given_base_valid"] = np.nan
 
     for model_type in ("mlp", "xgboost"):
-        plot_paper_family_heatmaps(tmp_path, family, model_type)
+        plot_family_heatmaps(tmp_path, family, model_type)
 
     assert (tmp_path / "paper_robustness_by_change_family_mlp.pdf").is_file()
     assert (tmp_path / "paper_robustness_by_change_family_xgboost.pdf").is_file()
@@ -123,7 +132,7 @@ def test_paper_tradeoff_omits_a_method_without_proximity(tmp_path):
         for method in METHOD_ORDER
     ]
 
-    plot_paper_tradeoff(tmp_path, pd.DataFrame(rows), "logistic")
+    plot_tradeoff(tmp_path, pd.DataFrame(rows), "logistic")
 
     assert (tmp_path / "paper_robustness_proximity_tradeoff_logistic.pdf").is_file()
 
@@ -303,7 +312,7 @@ def test_plausibility_figure_is_written_when_the_metric_was_recorded(tmp_path):
     overall, _ = synthetic_results()
 
     for model_type in tuple(MODEL_METHODS):
-        plot_paper_plausibility(tmp_path, overall, model_type)
+        plot_plausibility(tmp_path, overall, model_type)
 
     for model_type in tuple(MODEL_METHODS):
         assert (tmp_path / f"paper_robustness_plausibility_{model_type}.pdf").is_file()
@@ -312,8 +321,8 @@ def test_plausibility_figure_is_written_when_the_metric_was_recorded(tmp_path):
 def test_plausibility_figure_is_skipped_for_runs_without_the_metric(tmp_path):
     overall, _ = synthetic_results(plausibility=False)
 
-    plot_paper_plausibility(tmp_path, overall, "mlp")
-    plot_paper_plausibility(
+    plot_plausibility(tmp_path, overall, "mlp")
+    plot_plausibility(
         tmp_path, overall.drop(columns="mean_knn_distance_relative"), "mlp"
     )
 
@@ -351,3 +360,63 @@ def test_brief_without_rank_tests_says_so(tmp_path):
     )
 
     assert "No analysis had enough" in (tmp_path / "results_brief.md").read_text()
+
+
+def test_every_method_has_its_own_style():
+    styles = {method: method_style(method) for method in METHOD_ORDER}
+    points = [method for method in METHOD_ORDER if method not in MARGIN_METHODS[1:]]
+    greys = {styles[method].color for method in ("wachter", "growing_spheres")}
+
+    assert set(METHOD_ORDER) <= set(METHOD_STYLES)
+    assert len({styles[method].marker for method in points}) == len(points)
+    assert {styles[method].color for method in points} - greys == set(CATEGORICAL_HUES)
+    assert len(CATEGORICAL_HUES) <= 8
+    assert styles["robx_balanced"].color == styles["robx_robust"].color
+    assert styles["roar"].color == styles["roar_lime"].color
+
+
+def test_figures_are_written_and_embedded_in_the_brief(tmp_path):
+    overall, family = synthetic_results()
+
+    plot_family_heatmaps(tmp_path, family, "xgboost")
+    for plot in (plot_tradeoff, plot_plausibility, plot_metric_decomposition):
+        plot(tmp_path, overall, "xgboost")
+    xgboost = overall[overall["model_type"].eq("xgboost")]
+    write_brief(
+        tmp_path, xgboost, family, cross_class_summary(xgboost), rank_test_table({})
+    )
+
+    brief = (tmp_path / "results_brief.md").read_text()
+    embedded = re.findall(r"\]\(([^)]+\.png)\)", brief)
+    assert len(embedded) == 4
+    for name in embedded:
+        assert name.startswith("paper_")
+        assert (tmp_path / name).is_file()
+        assert (tmp_path / name).with_suffix(".pdf").is_file()
+
+
+def method_colours(figure) -> dict[str, str]:
+    return {
+        collection.get_label(): to_hex(collection.get_facecolor()[0])
+        for axis in figure.axes
+        for collection in axis.collections
+        if not collection.get_label().startswith("_")
+    }
+
+
+def test_colour_follows_the_method_not_the_subset_present(tmp_path, monkeypatch):
+    figures = []
+    monkeypatch.setattr(
+        results_packet, "save_figure", lambda figure, _: figures.append(figure)
+    )
+    overall, _ = synthetic_results()
+    dropped = ["wachter", "apas", "rbr", "kdtree"]
+
+    plot_tradeoff(tmp_path, overall, "logistic")
+    plot_tradeoff(tmp_path, overall[~overall["method"].isin(dropped)], "logistic")
+
+    full, partial = map(method_colours, figures)
+    expected = {style.label: style.color for style in METHOD_STYLES.values()}
+    assert full.items() <= expected.items()
+    assert partial.items() <= full.items()
+    assert len(partial) == len(full) - len(dropped)
