@@ -111,6 +111,8 @@ def test_reference_dataset_loaders_follow_the_shared_contract(
     assert all(set(pd.unique(labels)) == {0, 1} for labels in label_splits)
     assert data.favorable_source_label == favorable_source_label
     assert np.allclose(data.X_train.mean(axis=0), 0.0, atol=1e-6)
+    assert data.schema.numeric == data.schema.columns
+    assert not (data.schema.categorical or data.schema.integer or data.schema.immutable)
     assert all(
         set(feature_splits[i].index).isdisjoint(feature_splits[j].index)
         for i in range(len(feature_splits))
