@@ -1,7 +1,23 @@
+"""Growing spheres (Laugel et al., 2018) as used by BetaRCE and RobX.
+
+With a constrained FeatureSchema the sphere covers the mutable numeric columns
+only, immutable columns keep the instance's values, each mutable categorical
+feature is redrawn as a whole one-hot group (``resample_categories``), and
+candidates are projected (integer rounding) before they are scored. This
+extends the continuous-only original to mixed data.
+"""
+
 from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
+
+from robustness_benchmark.core.schema import FeatureSchema
+from robustness_benchmark.methods.feature_constraints import (
+    is_constrained,
+    mutable_groups,
+    resample_categories,
+)
 
 
 def hyper_sphere_coordinates(
@@ -35,9 +51,11 @@ def growing_spheres_search(
     feature_min: np.ndarray | None = None,
     feature_max: np.ndarray | None = None,
     rng: np.random.Generator | None = None,
+    schema: FeatureSchema | None = None,
 ) -> np.ndarray | None:
     if rng is None:
         rng = np.random.default_rng()
+    constrained = is_constrained(schema)
 
     instance = np.asarray(instance).reshape(1, -1)
     if not np.all(np.isfinite(instance)):
@@ -51,10 +69,15 @@ def growing_spheres_search(
 
     n_features = instance.shape[1]
     binary_indices = sorted(set(binary_indices)) if binary_indices else []
-    binary_mask = np.zeros(n_features, dtype=bool)
+    off_sphere = np.zeros(n_features, dtype=bool)
     if binary_indices:
-        binary_mask[binary_indices] = True
-    continuous_indices = np.where(~binary_mask)[0]
+        off_sphere[binary_indices] = True
+    groups = mutable_groups(schema) if constrained else []
+    if constrained:
+        off_sphere[schema.immutable_columns()] = True
+        for group in schema.one_hot_groups().values():
+            off_sphere[group] = True
+    continuous_indices = np.where(~off_sphere)[0]
 
     low = 0.0
     high = low + step
@@ -79,8 +102,13 @@ def growing_spheres_search(
                 size=(n_search_samples, len(binary_indices)),
             )
 
+        if groups:
+            resample_categories(candidates, groups, rng)
+
         if feature_min is not None and feature_max is not None:
             candidates = np.clip(candidates, feature_min, feature_max)
+        if constrained:
+            candidates = schema.project(candidates, instance)
 
         preds = pred_fn_crisp(candidates)
         mask = preds == target_class
@@ -124,6 +152,7 @@ class GrowingSpheresAdapter:
         if not 0.5 <= target_probability < 1.0:
             raise ValueError("target_probability must lie in [0.5, 1)")
         self.model = task.model
+        self.schema = task.schema
         self.target_probability = target_probability
         self.n_search_samples = n_search_samples
         self.p_norm = p_norm
@@ -152,6 +181,7 @@ class GrowingSpheresAdapter:
             step=self.step,
             max_iter=self.max_iter,
             rng=self.rng,
+            schema=self.schema,
         )
         self.last_metadata = {
             "status": "ok" if counterfactual is not None else "not_found",

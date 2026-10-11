@@ -108,13 +108,11 @@ class MCE(CEGenerator):
             print("No solution found using MCE!")
             return pd.DataFrame(instance).T
 
-        ce = []
-
-        # Find input variables and final CE
-        for v in self.opt.gurobiModel.getVars():
-            if "v_0_" in v.varName:
-                ce.append(v.getAttr(GRB.Attr.X))
-
-        res = pd.DataFrame(ce).T
+        ce = [
+            self.opt.inputNodes[f"v_0_{i}"].getAttr(GRB.Attr.X)
+            for i in range(len(self.task.training_data.X.columns))
+        ]
+        # The MILP encodes the schema; projection only removes solver tolerance.
+        res = pd.DataFrame([self.task.schema.project(ce, ilist)])
         res.columns = instance.index
         return res

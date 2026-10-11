@@ -1,3 +1,12 @@
+"""ROAR (Upadhyay et al., NeurIPS 2021) on a local LIME surrogate.
+
+Immutable columns get zero gradient in the ROAR optimizer, so they keep the
+factual's values; one-hot and integer validity come from projection after the
+search. LIME's surrogate samples perturb one-hot columns as continuous inputs;
+they only probe the black box and are never returned.
+"""
+
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -94,8 +103,12 @@ def optimize_roar(
     learning_rate: float,
     loss_threshold: float,
     maximum_iterations: int,
+    frozen: Sequence[int] = (),
 ) -> tuple[np.ndarray, int, bool, float, float]:
-    """Optimize the published ROAR min-max binary-cross-entropy objective."""
+    """Optimize the published ROAR min-max binary-cross-entropy objective.
+
+    ``frozen`` columns get zero gradient, so Adam keeps them at the factual.
+    """
 
     x = torch.as_tensor(factual, dtype=torch.float32)
     weights = torch.as_tensor(coefficients, dtype=torch.float32)
@@ -123,6 +136,8 @@ def optimize_roar(
         cost = torch.linalg.vector_norm(candidate - x, ord=1)
         loss = validity_loss + lambda_param * cost
         loss.backward()
+        if frozen:
+            candidate.grad[list(frozen)] = 0.0
         optimizer.step()
 
         if (
@@ -224,6 +239,7 @@ class RoarLimeAdapter:
             learning_rate=self.learning_rate,
             loss_threshold=self.loss_threshold,
             maximum_iterations=self.maximum_iterations,
+            frozen=self.task.schema.immutable_columns(),
         )
         result = pd.DataFrame([ce], columns=instance.index)
         factual_surrogate_probability = float(

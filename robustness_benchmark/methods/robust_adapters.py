@@ -37,6 +37,7 @@ class RobXAdapter:
             lambda values: _proba(task.model, values),
             feature_min=X_train.min(axis=0),
             feature_max=X_train.max(axis=0),
+            schema=task.schema,
         )
         self.last_metadata: dict[str, object] = {}
 
@@ -101,12 +102,14 @@ class BetaRCEAdapter:
         self.base_gs_max_iter = base_gs_max_iter
         self.gs_max_iter = gs_max_iter
         self.base_predict = lambda values: _crisp(task.model, values)
+        self.schema = task.schema
         self.generator = BetaRCE(
             self.base_predict,
             [
                 lambda values, model=model: _crisp(model, values)
                 for model in generation_models
             ],
+            schema=task.schema,
         )
         self.last_metadata: dict[str, object] = {}
 
@@ -123,6 +126,7 @@ class BetaRCEAdapter:
             step=self.gs_step,
             max_iter=self.base_gs_max_iter,
             rng=self.rng,
+            schema=self.schema,
         )
         if base_counterfactual is None:
             self.last_metadata = {

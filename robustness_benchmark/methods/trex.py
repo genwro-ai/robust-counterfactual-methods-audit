@@ -15,6 +15,8 @@ Deviations, all for comparability with RobX:
 - R is checked at the current iterate, so a returned point that met tau is the
   one tested; the reference tests the point before its update.
 - 200 steps, the largest budget in Appendix D.
+- Immutable columns get zero gradient (the Wachter base also keeps them);
+  projection after the search restores one-hot and integer validity.
 """
 
 import numpy as np
@@ -51,6 +53,7 @@ def trex_search(
     feature_min: np.ndarray,
     feature_max: np.ndarray,
     rng: np.random.Generator,
+    frozen: list[int] | None = None,
 ) -> tuple[np.ndarray, float, int]:
     """Return the last valid iterate, its stability and the steps taken.
 
@@ -84,6 +87,8 @@ def trex_search(
         if step == max_steps:
             break
         (gradient,) = torch.autograd.grad(stability, z)
+        if frozen:
+            gradient[frozen] = 0.0
         with torch.no_grad():
             z = z + step_size * gradient / (gradient.norm() + 1e-7)
             shift = z - anchor
@@ -106,6 +111,7 @@ class TRexAdapter:
         trust_radius: float = 1.0,
     ) -> None:
         self.model = task.model
+        self.frozen = task.schema.immutable_columns()
         self.variance = variance
         self.stability_samples = stability_samples
         self.step_size = step_size
@@ -161,6 +167,7 @@ class TRexAdapter:
             feature_min=self.feature_min,
             feature_max=self.feature_max,
             rng=self.rng,
+            frozen=self.frozen,
         )
         self.last_metadata = {
             **metadata,

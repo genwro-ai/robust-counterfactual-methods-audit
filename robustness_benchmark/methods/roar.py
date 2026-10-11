@@ -5,7 +5,9 @@ the worst-case shift of the coefficients and intercept inside an L-infinity box,
 plus an L1 cost. ``RoarLimeAdapter`` applies that objective to a local LIME
 surrogate of a black box; when the base model is itself logistic, the
 surrogate is unnecessary and the box is centred on the model's exact
-parameters. The optimizer is shared with ROAR-LIME.
+parameters. The optimizer is shared with ROAR-LIME, including its masking of
+immutable columns; projection after the search restores one-hot and integer
+validity.
 """
 
 import pandas as pd
@@ -27,6 +29,7 @@ class RoarAdapter:
         maximum_iterations: int = 20_000,
     ) -> None:
         self.model = task.model
+        self.frozen = task.schema.immutable_columns()
         self.coefficients, self.intercept = task.model.linear_parameters()
         self.delta = delta
         self.lambda_param = lambda_param
@@ -48,6 +51,7 @@ class RoarAdapter:
             learning_rate=self.learning_rate,
             loss_threshold=self.loss_threshold,
             maximum_iterations=self.maximum_iterations,
+            frozen=self.frozen,
         )
         result = pd.DataFrame([ce], columns=instance.index)
         self.last_metadata = {
