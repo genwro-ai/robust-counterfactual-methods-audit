@@ -1,10 +1,17 @@
 # Robust to Which Model Change?
 
-Benchmark code for *Robust to Which Model Change? A Unified Evaluation of Robust Counterfactual Explanations*. The harness generates counterfactual
-explanations (CFEs) for a fixed set of factual instances, holds them fixed, and
-tests them against 200 held-out changed classifiers per base model, drawn from
-eight model-change families. It reports coverage, base validity, empirical
-robustness, end-to-end robustness, and proximity separately.
+> The code used for the workshop paper ([arXiv:2609.30918](https://arxiv.org/abs/2609.30918))
+> is at tag [`workshop-2026`](https://github.com/genwro-ai/robust-counterfactual-methods-audit/tree/workshop-2026)
+> and branch [`workshop`](https://github.com/genwro-ai/robust-counterfactual-methods-audit/tree/workshop).
+> `main` holds the extended benchmark for the journal version.
+
+Benchmark code for *Robust to Which Model Change? A Unified Evaluation of Robust
+Counterfactual Explanations*. The harness generates counterfactual explanations
+(CFEs) for a fixed set of factual instances, holds them fixed, and tests them
+against a bank of held-out changed classifiers per base model, drawn from
+families of model change. It covers MLPs, logistic regression, and XGBoost, and
+reports coverage, base validity, empirical robustness, end-to-end robustness,
+proximity, sparsity, and plausibility separately.
 
 The implementation is self-contained. BetaRCE, RobX, growing spheres, RBR, and
 ROAR components were adapted from the original authors' code; provenance and
