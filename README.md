@@ -167,7 +167,9 @@ Method settings (`robustness_benchmark/methods/configuration.py`):
   (step 0.05). The weight and bias radius $\delta_{inc}$ is calibrated per base
   model as the mean parameter $\ell_\infty$ distance over ten copies trained
   for one more epoch on 10% of the update pool (Adam, learning rate 0.01,
-  batch 256), the authors' protocol. The first-layer interval uses a sign-aware
+  batch 256), the authors' protocol. Our update pools are small, so this is a
+  single Adam step and $\delta_{inc}$ comes out close to the learning rate
+  (0.01) on every dataset. The first-layer interval uses a sign-aware
   bound so that it is sound for standardized (negative) inputs.
 - **AP$\Delta$S**: the authors' iterative MCE margin search with
   $\alpha=0.999$, $R=0.995$ (1,378 sampled perturbations) and a 30 s wall-time

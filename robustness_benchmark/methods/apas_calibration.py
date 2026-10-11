@@ -66,6 +66,9 @@ def apas_update_calibration(
 # more epoch (Adam, lr 0.01, batch 256, shuffled) on 10% of the incoming data,
 # sampled without replacement (intabs/evaluation.py incremental_training_get_delta
 # and classifier_binary.py partial_fit). The update pool is the incoming data.
+# Our pools are small, so 10% of one fits a single batch: each copy takes one
+# Adam step, which moves every parameter by about the learning rate, and
+# delta_inc comes out close to 0.01 on every dataset.
 RNCE_UPDATE_CALIBRATION = UpdateCalibration(
     method="rnce",
     protocol_version=RNCE_CALIBRATION_PROTOCOL_VERSION,
