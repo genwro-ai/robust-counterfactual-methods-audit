@@ -207,6 +207,32 @@ def test_mlp_methods_return_valid_encodings(monkeypatch, mixed_setting, method):
             assert_valid(values, factual.to_numpy(), schema)
 
 
+@pytest.mark.parametrize("method", ["trex", "roar_lime", "rbr"])
+def test_reverted_methods_return_their_relaxed_point(
+    monkeypatch, mixed_setting, method
+):
+    X, y, schema, model, ensemble = mixed_setting
+    task = make_task(model, X, y, seed=3, schema=schema)
+    factuals = adverse(model, X)
+
+    counterfactuals, rows, raw = run_recorded(
+        monkeypatch, method, task, factuals, ensemble, FAST_CONFIGS[method]
+    )
+
+    relaxed = 0
+    for (factual, result), (_, ce), row in zip(
+        raw, counterfactuals.iterrows(), rows, strict=True
+    ):
+        if row["generation_status"] not in {"success", "base_invalid"}:
+            continue
+        values = result.iloc[0].to_numpy(dtype=float)
+        projected = schema.project(values, factual.to_numpy())
+        # The registry, not the method, projects the output.
+        np.testing.assert_allclose(ce.to_numpy(), projected)
+        relaxed += not np.allclose(values, projected)
+    assert relaxed
+
+
 @pytest.mark.parametrize("method", ["roar", "wachter", "growing_spheres"])
 def test_logistic_methods_return_valid_encodings(mixed_setting, method):
     X, y, schema, _, _ = mixed_setting
@@ -298,6 +324,15 @@ def test_milp_encodes_groups_immutables_and_integers():
     solution, model = milp_solution(job_c_weight=0.5)
 
     np.testing.assert_allclose(solution, [1.1, 0.0, 1.0, 0.0, 0.0], atol=1e-6)
+    assert model.predict_single(solution) == 1
+
+
+def test_milp_category_switch_costs_one():
+    # Job c alone now suffices. It costs 1 (the largest one-hot change), less
+    # than 11 years at 1.1; at the summed L1 cost of 2, age would win.
+    solution, model = milp_solution(job_c_weight=3.0)
+
+    np.testing.assert_allclose(solution, [0.0, 0.0, 0.0, 0.0, 1.0], atol=1e-6)
     assert model.predict_single(solution) == 1
 
 

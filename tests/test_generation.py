@@ -13,7 +13,10 @@ from robustness_benchmark.methods.betarce import (
 )
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
 from robustness_benchmark.methods.robust_adapters import BetaRCEAdapter
-from robustness_benchmark.methods.robx import tau_from_stability_quantile
+from robustness_benchmark.methods.robx import (
+    robx_algorithm,
+    tau_from_stability_quantile,
+)
 
 
 class ExplodingGenerator:
@@ -106,6 +109,30 @@ def test_robx_tau_uses_training_stability_quantile_and_probability_floor():
     assert balanced["qualifying_training_points"] == 2
     assert low_tau == 0.5
     assert low["raw_tau"] < 0.5
+
+
+def test_robx_returns_the_stable_chain_point_closest_to_the_factual():
+    # P(y=1) is 0.9 once a >= 0.5, else 0.6; tiny noise makes stability equal
+    # P(y=1). From (0, 0), the chain towards (2, 0) passes first (step 3, at
+    # (0.54, 0)) and the chain towards (1, 10) later (step 7, at 0.52 * (1, 10)),
+    # which is closer to the factual (0, 6). BetaRCE's code returns the first.
+    def probability(values):
+        return np.where(np.asarray(values)[:, 0] >= 0.5, 0.9, 0.6)
+
+    counterfactual, conservative = robx_algorithm(
+        np.array([[1.0, 10.0], [2.0, 0.0]]),
+        probability,
+        np.zeros(2),
+        variance=1e-12,
+        tau=0.8,
+        N=10,
+        k=2,
+        rng=np.random.default_rng(0),
+        factual=np.array([0.0, 6.0]),
+    )
+
+    assert len(conservative) == 2
+    np.testing.assert_allclose(counterfactual, (1 - 0.9**7) * np.array([1.0, 10.0]))
 
 
 def test_betarce_paper_confidence_requires_unanimous_32_model_ensemble():

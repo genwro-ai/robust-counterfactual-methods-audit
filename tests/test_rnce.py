@@ -1,11 +1,18 @@
+import numpy as np
 import pandas as pd
 import pytest
 import torch
 from gurobipy import GRB
 
 from robustness_benchmark.core.model import TorchBinaryModel
+from robustness_benchmark.methods.apas_calibration import rnce_method_config
+from robustness_benchmark.methods.configuration import LOCKED_CONFIGS
 from robustness_benchmark.methods.delta_robustness import DeltaRobustnessEvaluator
-from robustness_benchmark.methods.registry import create_generator, make_task
+from robustness_benchmark.methods.registry import (
+    create_generator,
+    generate_counterfactuals,
+    make_task,
+)
 from robustness_benchmark.methods.rnce import RNCE_INTERVAL_ENCODING
 
 
@@ -125,3 +132,52 @@ def test_logistic_interval_bound_matches_closed_form_on_negative_inputs():
     assert minimum_pgd_logit(
         model, X.iloc[0].to_numpy(), delta=0.5, bias_delta=0.1
     ) == pytest.approx(2.15, abs=1e-4)
+
+
+def sum_logit_task():
+    """logit = a + b - 1; of the training points only (3, 0) and (2, 2) are robust."""
+
+    model = TorchBinaryModel(input_dim=2, hidden_dim=(), seed=0)
+    linear = model.get_torch_model()[0]
+    with torch.no_grad():
+        linear.weight.fill_(1.0)
+        linear.bias.fill_(-1.0)
+    X = pd.DataFrame({"a": [0.0, 3.0, 2.0], "b": [0.0, 0.0, 2.0]})
+    return X, make_task(model, X, pd.Series([0, 1, 1]), seed=0)
+
+
+def test_rnce_picks_the_l1_nearest_robust_neighbour():
+    # From (0, 0), (3, 0) is nearer in L1 (3 < 4); (2, 2) is nearer in L2.
+    X, task = sum_logit_task()
+
+    counterfactuals, _ = generate_counterfactuals(
+        "rnce", task, X.iloc[[0]], method_config={"optimal": False}
+    )
+
+    assert counterfactuals.iloc[0].tolist() == [3.0, 0.0]
+
+
+def test_rnce_line_search_returns_the_certified_point_nearest_the_factual():
+    # On the segment s * (3, 0) the certified logit is 2.985 s - 1.005, so the
+    # 0.05 grid first certifies s = 0.35 (s = 0.30 fails).
+    X, task = sum_logit_task()
+
+    counterfactuals, (row,) = generate_counterfactuals(
+        "rnce", task, X.iloc[[0]], method_config={"optimal": True}
+    )
+
+    np.testing.assert_allclose(counterfactuals.iloc[0], [1.05, 0.0])
+    assert row["base_valid"]
+
+
+def test_rnce_delta_is_the_mean_update_distance():
+    calibration = {
+        "replicas": [{"parameter_linf_distance": d} for d in (0.01, 0.02, 0.06)],
+        "calibration_fingerprint": "abc",
+    }
+
+    config = rnce_method_config(LOCKED_CONFIGS["rnce"], calibration)
+
+    assert config["delta"] == config["bias_delta"] == pytest.approx(0.03)
+    assert config["optimal"] is True
+    assert config["calibration_fingerprint"] == "abc"
