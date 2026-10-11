@@ -116,7 +116,7 @@ FAST_CONFIGS = {
     "gs_margin_80": {},
 }
 # Methods whose own output, before the registry projects it, is always a valid
-# encoding; gradient methods return one only once its projection is valid.
+# encoding; Wachter returns one only once its projection is valid.
 VALID_BEFORE_PROJECTION = {
     "kdtree",
     "rnce",
@@ -125,9 +125,11 @@ VALID_BEFORE_PROJECTION = {
     "growing_spheres",
     "gs_margin_80",
 }
-# Faithful to its original code, RobX treats every encoded column as
-# continuous; only the registry's projection makes its output valid.
-RELAXED_SEARCH = {"robx"}
+# Faithful to their original code, these search one-hot and integer columns as
+# continuous and return the relaxed point; only the registry's projection makes
+# their output valid. The gradient ones among them still freeze immutables.
+RELAXED_SEARCH = {"robx", "trex", "roar_lime", "rbr"}
+RELAXED_IMMUTABLES = {"robx"}
 
 
 class RecordingGenerator:
@@ -189,6 +191,9 @@ def test_mlp_methods_return_valid_encodings(monkeypatch, mixed_setting, method):
             # Validity was judged on the returned point, not on a relaxed one.
             assert row["projection_changed"] is False
     if method in RELAXED_SEARCH:
+        # The method returns its relaxed point; only the registry projects it.
+        assert any(row["projection_changed"] for row in rows)
+    if method in RELAXED_IMMUTABLES:
         return
     immutable = schema.immutable_columns()
     for factual, result in raw:
@@ -223,11 +228,14 @@ def test_logistic_methods_return_valid_encodings(mixed_setting, method):
     ):
         if row["base_valid"]:
             assert_valid(ce.to_numpy(), factual.to_numpy(), schema)
-            assert row["projection_changed"] is False
+            if method != "roar":
+                assert row["projection_changed"] is False
+    if method == "roar":
+        # ROAR returns its relaxed point; only the registry projects it.
+        assert any(row["projection_changed"] for row in rows)
 
 
-@pytest.mark.parametrize("method", ["wachter", "trex"])
-def test_gradient_search_judges_validity_after_rounding(method):
+def test_wachter_judges_validity_after_rounding():
     # P(y=1) passes 0.5 at age 10.3: a search that stops just past the
     # boundary rounds back to the adverse age 10, so it must reach 11.
     schema = FeatureSchema(
@@ -240,9 +248,7 @@ def test_gradient_search_judges_validity_after_rounding(method):
         model.get_torch_model()[0].bias.fill_(-51.5)
     task = make_task(model, X, (X["age"] > 10.3).astype(int), seed=0, schema=schema)
 
-    counterfactuals, (row,) = generate_counterfactuals(
-        method, task, X.iloc[[5]], method_config=FAST_CONFIGS[method]
-    )
+    counterfactuals, (row,) = generate_counterfactuals("wachter", task, X.iloc[[5]])
 
     assert row["generation_status"] == "success"
     assert row["projection_changed"] is False

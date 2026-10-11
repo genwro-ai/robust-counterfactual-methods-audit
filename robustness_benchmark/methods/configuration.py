@@ -9,6 +9,7 @@ from robustness_benchmark.core.classifiers import (
     missing_capabilities,
 )
 from robustness_benchmark.methods.apas import APAS_IMPLEMENTATION
+from robustness_benchmark.methods.rbr import RBR_IMPLEMENTATION
 from robustness_benchmark.methods.rnce import RNCE_INTERVAL_ENCODING
 from robustness_benchmark.methods.roar import ROAR_IMPLEMENTATION
 from robustness_benchmark.methods.roar_lime import ROAR_LIME_IMPLEMENTATION
@@ -79,6 +80,7 @@ LOCKED_CONFIGS: dict[str, dict[str, object]] = {
         "interval_encoding": RNCE_INTERVAL_ENCODING,
     },
     "rbr": {
+        "implementation": RBR_IMPLEMENTATION,
         "num_counterfactuals": 1_000,
         "num_samples": 200,
         "perturb_radius_fraction": 0.2,

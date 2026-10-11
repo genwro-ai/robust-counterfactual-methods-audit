@@ -1,16 +1,16 @@
-"""RBR (Nguyen et al., NeurIPS 2022) through the authors' implementation.
+"""RBR (Nguyen et al., UAI 2022) through the authors' implementation.
 
 Immutable columns are masked out of the search: the boundary line search walks
 towards training points carrying the factual's immutable values, and the
 projected gradient steps leave those columns at zero gradient. The ambiguity
-samples around the boundary point only shape the loss. Projection after the
-search restores one-hot and integer validity.
+samples around the boundary point only shape the loss.
 
-Deviation on constrained schemas: the boundary line search and the validity
-of each gradient iterate are judged on projected points, and the last valid
-projected iterate is returned. Without a boundary point, or when the samples
-around it all share one class, the loss is undefined and no counterfactual is
-returned.
+As in VinAI's ``rbr.py``, the final iterate ``x_t`` is returned: one-hot and
+integer columns are searched as continuous (the authors define
+``reconstruct_encoding_constraints`` but never call it), and the registry's
+final projection makes the point a valid encoding. Without a boundary point,
+or when the samples around it all share one class, the loss is undefined; the
+authors' code crashes there, and this adapter returns no counterfactual.
 """
 
 import numpy as np
@@ -18,6 +18,8 @@ import pandas as pd
 from scipy.spatial.distance import pdist
 
 from robustness_benchmark.methods.rbr_core import RBR as AuthorRBR
+
+RBR_IMPLEMENTATION = "nguyen2022_authors_final_iterate_v2"
 
 
 class LabelPredictor:
@@ -84,7 +86,6 @@ class RBRAdapter:
             random_state=self.seed,
             device="cpu",
             frozen=task.schema.immutable_columns(),
-            schema=task.schema,
         )
         self.last_metadata: dict[str, object] = {}
 
@@ -109,6 +110,7 @@ class RBRAdapter:
         finite = len(values) == len(factual) and bool(np.isfinite(values).all())
         base_valid = finite and self.task.model.predict_single(values) == 1
         self.last_metadata = {
+            "rbr_implementation": RBR_IMPLEMENTATION,
             "rbr_outcome": (
                 "no_counterfactual"
                 if candidate is None

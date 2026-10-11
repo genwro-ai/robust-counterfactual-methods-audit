@@ -17,7 +17,7 @@ from robustness_benchmark.methods.configuration import (
 )
 from robustness_benchmark.methods.growing_spheres import GrowingSpheresAdapter
 from robustness_benchmark.methods.kdtree import KDTreeNNCE
-from robustness_benchmark.methods.rbr import RBRAdapter
+from robustness_benchmark.methods.rbr import RBR_IMPLEMENTATION, RBRAdapter
 from robustness_benchmark.methods.rnce import RNCE
 from robustness_benchmark.methods.roar import ROAR_IMPLEMENTATION, RoarAdapter
 from robustness_benchmark.methods.roar_lime import (
@@ -116,6 +116,7 @@ def create_generator(
             config,
         )
     if name == "rbr":
+        _check_implementation(config, "RBR", RBR_IMPLEMENTATION)
         return (
             RBRAdapter(
                 task,
