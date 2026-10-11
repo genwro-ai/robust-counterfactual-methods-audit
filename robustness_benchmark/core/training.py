@@ -3,12 +3,13 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import balanced_accuracy_score
+from sklearn.metrics import balanced_accuracy_score, log_loss
 
 from robustness_benchmark.core.classifiers import Classifier, TorchBinaryModel
 from robustness_benchmark.core.data import DatasetSplit
 from robustness_benchmark.core.model_specs import (
     FULL_VARIANTS_PER_FAMILY,
+    RELATIVE_PARAMETER_RADII,
     MLPSpec,
     ModelSpec,
     perturb_torch_parameters,
@@ -54,6 +55,7 @@ def make_bounded_parameter_change(
     perturbation_seed: int,
     replicate: int = 0,
     spec: ModelSpec | None = None,
+    relative_radius: float | None = None,
 ) -> ChangedModel:
     """Perturb aligned parameters within an exact L-infinity radius.
 
@@ -61,6 +63,8 @@ def make_bounded_parameter_change(
     reaches ``radius``. Consequently every parameter change is bounded by the
     declared radius, while the realized L-infinity distance is non-vacuous.
     Torch networks perturb weights and biases; XGBoost perturbs leaf values.
+    ``relative_radius`` records ``radius`` as a fraction of the mean |parameter|
+    and names the level after it.
     """
 
     if radius <= 0:
@@ -75,7 +79,11 @@ def make_bounded_parameter_change(
         model = spec.perturb_parameters(
             base_model, radius=radius, seed=perturbation_seed
         )
-    level = f"linf_{radius:g}"
+    level = (
+        f"relative_linf_{relative_radius:g}"
+        if relative_radius is not None
+        else f"linf_{radius:g}"
+    )
     return ChangedModel(
         f"bounded_parameter:{level}:r{replicate}",
         "bounded_parameter",
@@ -84,6 +92,7 @@ def make_bounded_parameter_change(
         {
             "parameter_norm": "linf",
             "parameter_radius": radius,
+            "relative_parameter_radius": relative_radius,
             "perturbed_parameters": (
                 "leaf_values" if base_model.model_type == "xgboost" else "weights"
             ),
@@ -136,12 +145,7 @@ def fit_model(
     return model
 
 
-ARCHITECTURE_CANDIDATES: tuple[tuple[int, ...], ...] = (
-    (16, 16),
-    (32, 16),
-    (32, 32),
-)
-ARCHITECTURE_DEV_SEEDS = (2026, 2027, 2028)
+SELECTION_DEV_SEEDS = (2026, 2027, 2028)
 FULL_CHANGE_FAMILIES = MLPSpec.change_families
 SMOKE_CHANGE_FAMILIES = (
     "seed",
@@ -160,111 +164,48 @@ def _replicates_by_level(total: int, levels: int) -> tuple[int, ...]:
     return tuple(quotient + (index < remainder) for index in range(levels))
 
 
-def architecture_audit(
-    data: DatasetSplit,
-    *,
-    epochs: int,
-    candidates: tuple[tuple[int, ...], ...] = ARCHITECTURE_CANDIDATES,
-    seeds: tuple[int, ...] = ARCHITECTURE_DEV_SEEDS,
-    tolerance: float = 0.01,
-) -> tuple[tuple[int, ...], list[dict[str, object]]]:
-    """Select the smallest architecture within tolerance of the best mean score."""
-
-    rows: list[dict[str, object]] = []
-    means: dict[tuple[int, ...], float] = {}
-    for hidden_dim in candidates:
-        scores = []
-        for seed in seeds:
-            model = fit_model(
-                data.X_train,
-                data.y_train,
-                data.X_val,
-                data.y_val,
-                seed=seed,
-                hidden_dim=hidden_dim,
-                epochs=epochs,
-            )
-            prediction = (model.predict(data.X_val).iloc[:, 0] >= 0.5).astype(int)
-            score = float(balanced_accuracy_score(data.y_val, prediction))
-            scores.append(score)
-            rows.append(
-                {
-                    "hidden_dim": list(hidden_dim),
-                    "seed": seed,
-                    "validation_balanced_accuracy": score,
-                }
-            )
-        means[hidden_dim] = float(np.mean(scores))
-
-    best_mean = max(means.values())
-    eligible = [
-        hidden for hidden in candidates if means[hidden] >= best_mean - tolerance
-    ]
-    selected = min(eligible, key=lambda hidden: (sum(hidden), len(hidden), hidden))
-    for row in rows:
-        hidden_values = row["hidden_dim"]
-        if not isinstance(hidden_values, list):
-            raise TypeError("hidden_dim audit field must be a list")
-        hidden = tuple(int(width) for width in hidden_values)
-        row["mean_validation_balanced_accuracy"] = means[hidden]
-        row["best_mean_validation_balanced_accuracy"] = best_mean
-        row["within_tolerance"] = hidden in eligible
-        row["selected"] = hidden == selected
-    return selected, rows
-
-
 def select_base_spec(
     data: DatasetSplit,
     base: ModelSpec,
     *,
-    seeds: tuple[int, ...] = ARCHITECTURE_DEV_SEEDS,
-    tolerance: float = 0.01,
+    seeds: tuple[int, ...] = SELECTION_DEV_SEEDS,
 ) -> tuple[ModelSpec, list[dict[str, object]]]:
-    """Select the simplest grid configuration within tolerance of the best.
+    """Select the grid configuration with the lowest validation log-loss.
 
-    Candidates come from ``type(base).selection_grid(base)`` and are scored by
-    mean validation balanced accuracy over ``seeds``. Changed models are never
-    consulted.
+    The grid (``type(base).selection_grid(base)``) and the rule are fixed in
+    advance; each candidate is scored by its mean validation log-loss over
+    ``seeds``. Changed models are never consulted.
     """
 
     candidates = type(base).selection_grid(base)
     rows: list[dict[str, object]] = []
     means: list[float] = []
     for index, candidate in enumerate(candidates):
-        scores = []
+        losses = []
         for seed in seeds:
             model = fit_spec(
-                candidate,
-                data.X_train,
-                data.y_train,
-                data.X_val,
-                data.y_val,
-                seed=seed,
+                candidate, data.X_train, data.y_train, data.X_val, data.y_val, seed=seed
             )
-            prediction = (model.predict(data.X_val).iloc[:, 0] >= 0.5).astype(int)
-            score = float(balanced_accuracy_score(data.y_val, prediction))
-            scores.append(score)
+            probability = model.predict(data.X_val).iloc[:, 0].to_numpy()
+            loss = float(log_loss(data.y_val, probability, labels=[0, 1]))
+            losses.append(loss)
             rows.append(
                 {
                     "candidate": index,
                     "model_spec": candidate.to_dict(),
                     "seed": seed,
-                    "validation_balanced_accuracy": score,
+                    "validation_log_loss": loss,
+                    "validation_balanced_accuracy": float(
+                        balanced_accuracy_score(data.y_val, probability >= 0.5)
+                    ),
                 }
             )
-        means.append(float(np.mean(scores)))
+        means.append(float(np.mean(losses)))
 
-    best_mean = max(means)
-    eligible = [
-        index for index, mean in enumerate(means) if mean >= best_mean - tolerance
-    ]
-    selected = min(eligible, key=lambda index: candidates[index].complexity())
+    selected = int(np.argmin(means))
     for row in rows:
-        index = int(row["candidate"])
-        row["mean_validation_balanced_accuracy"] = means[index]
-        row["best_mean_validation_balanced_accuracy"] = best_mean
-        row["within_tolerance"] = index in eligible
-        row["selected"] = index == selected
+        row["mean_validation_log_loss"] = means[int(row["candidate"])]
+        row["selected"] = row["candidate"] == selected
     return candidates[selected], rows
 
 
@@ -334,23 +275,6 @@ def make_changed_models(
             )
         )
 
-    def pool_subsets(seed_offset: int):
-        # A fixed update pool has only one genuinely distinct 100% subset. Use
-        # eight independent subsets at each lower level and the full pool once.
-        design = ((1.0, 1),) if smoke else ((0.25, 8), (0.50, 8), (0.75, 8), (1.0, 1))
-        for fraction, level_replicates in design:
-            for replicate in range(level_replicates):
-                sampling_seed = (
-                    base_seed + seed_offset + round(fraction * 1_000) + replicate
-                )
-                update_n = max(1, round(fraction * len(data.X_update)))
-                update_rows = np.sort(
-                    np.random.default_rng(sampling_seed).choice(
-                        len(data.X_update), size=update_n, replace=False
-                    )
-                )
-                yield fraction, replicate, sampling_seed, update_n, update_rows
-
     replicate_count = 1 if smoke else FULL_VARIANTS_PER_FAMILY
 
     def build_seed() -> None:
@@ -410,9 +334,21 @@ def make_changed_models(
                 )
 
     def build_data_addition() -> None:
-        for fraction, replicate, sampling_seed, update_n, update_rows in pool_subsets(
-            30_000
+        # A fixed update pool has only one genuinely distinct 100% subset. Use
+        # eight independent subsets at each lower level and the full pool once.
+        design = ((1.0, 1),) if smoke else ((0.25, 8), (0.50, 8), (0.75, 8), (1.0, 1))
+        for fraction, replicate in (
+            (fraction, replicate)
+            for fraction, level_replicates in design
+            for replicate in range(level_replicates)
         ):
+            sampling_seed = base_seed + 30_000 + round(fraction * 1_000) + replicate
+            update_n = max(1, round(fraction * len(data.X_update)))
+            update_rows = np.sort(
+                np.random.default_rng(sampling_seed).choice(
+                    len(data.X_update), size=update_n, replace=False
+                )
+            )
             X_augmented = pd.concat(
                 [data.X_train, data.X_update.iloc[update_rows]], ignore_index=True
             )
@@ -497,18 +433,19 @@ def make_changed_models(
             )
 
     def build_bounded_parameter() -> None:
-        radii = (0.01,) if smoke else (0.001, 0.005, 0.01, 0.02, 0.05)
-        for radius in radii:
+        scale = spec.parameter_scale(base_model)
+        for relative_radius in (0.1,) if smoke else RELATIVE_PARAMETER_RADII:
             for replicate in range(1 if smoke else 5):
                 perturbation_seed = (
-                    base_seed + 80_000 + round(radius * 1_000_000) + replicate
+                    base_seed + 80_000 + round(relative_radius * 1_000) + replicate
                 )
                 change = make_bounded_parameter_change(
                     base_model,
-                    radius=radius,
+                    radius=relative_radius * scale,
                     perturbation_seed=perturbation_seed,
                     replicate=replicate,
                     spec=spec,
+                    relative_radius=relative_radius,
                 )
                 change.metadata.update(
                     {"model_type": spec.model_type, **spec.hyperparameters()}
@@ -516,33 +453,49 @@ def make_changed_models(
                 changed.append(change)
 
     def build_incremental_update() -> None:
-        # Seeds are disjoint from the APAS calibration replicas (base + 200000).
-        for fraction, replicate, sampling_seed, update_n, update_rows in pool_subsets(
-            50_000
+        # Each update continues training the base model on a bootstrap sample
+        # of the update pool, from a light refresh to a heavy one. Seeds are
+        # disjoint from the APAS calibration replicas.
+        intensities = spec.incremental_intensities[: 1 if smoke else None]
+        replicates = (
+            (1,)
+            if smoke
+            else _replicates_by_level(FULL_VARIANTS_PER_FAMILY, len(intensities))
+        )
+        update_n = len(data.X_update)
+        for level_index, (intensity, level_replicates) in enumerate(
+            zip(intensities, replicates, strict=True)
         ):
-            model = spec.incremental_update(
-                base_model,
-                data.X_update.iloc[update_rows].reset_index(drop=True),
-                data.y_update.iloc[update_rows].reset_index(drop=True),
-            )
-            level = f"{fraction:g}_update_pool"
-            changed.append(
-                ChangedModel(
-                    f"incremental_update:{level}:r{replicate}:seed{sampling_seed}",
-                    "incremental_update",
-                    level,
-                    model,
-                    {
-                        "model_type": spec.model_type,
-                        **spec.hyperparameters(),
-                        "initialized_from_base_checkpoint": True,
-                        "update_n": update_n,
-                        "update_fraction": fraction,
-                        "sampling_seed": sampling_seed,
-                        "replicate": replicate,
-                    },
+            level = f"{spec.incremental_unit}_{intensity:g}"
+            for replicate in range(level_replicates):
+                sampling_seed = base_seed + 50_000 + 1_000 * level_index + replicate
+                rows = np.random.default_rng(sampling_seed).integers(
+                    0, update_n, size=update_n
                 )
-            )
+                model = spec.incremental_update(
+                    base_model,
+                    data.X_update.iloc[rows].reset_index(drop=True),
+                    data.y_update.iloc[rows].reset_index(drop=True),
+                    intensity=intensity,
+                )
+                changed.append(
+                    ChangedModel(
+                        f"incremental_update:{level}:r{replicate}:seed{sampling_seed}",
+                        "incremental_update",
+                        level,
+                        model,
+                        {
+                            "model_type": spec.model_type,
+                            **spec.hyperparameters(),
+                            "initialized_from_base_checkpoint": True,
+                            spec.incremental_unit: intensity,
+                            "sampling_scheme": "bootstrap_update_pool",
+                            "update_n": update_n,
+                            "sampling_seed": sampling_seed,
+                            "replicate": replicate,
+                        },
+                    )
+                )
 
     builders = {
         "seed": build_seed,

@@ -17,12 +17,10 @@ from robustness_benchmark.core.provenance import (
     write_json,
 )
 from robustness_benchmark.core.training import (
-    ARCHITECTURE_CANDIDATES,
-    ARCHITECTURE_DEV_SEEDS,
     BETARCE_GENERATION_ENSEMBLE_PROTOCOL,
     BETARCE_GENERATION_ENSEMBLE_SIZE,
     FULL_VARIANTS_PER_FAMILY,
-    architecture_audit,
+    SELECTION_DEV_SEEDS,
     fit_spec,
     make_betarce_generation_ensemble,
     make_changed_models,
@@ -184,49 +182,21 @@ def _prepare_base_seed(
     return catalog_rows, checkpoints
 
 
-def _select_mlp_spec(
+def _select_spec(
     data: DatasetSplit,
+    base: ModelSpec,
     *,
-    epochs: int,
-    base_architecture: tuple[int, ...],
     output: Path,
-) -> MLPSpec:
-    """Record the architecture audit and keep the prespecified architecture."""
+    prespecified: ModelSpec | None = None,
+) -> ModelSpec:
+    """Run the a priori base-configuration selection and record it.
 
-    audit_recommendation, audit_rows = architecture_audit(data, epochs=epochs)
-    if not base_architecture or any(width <= 0 for width in base_architecture):
-        raise ValueError("base_architecture must contain positive layer widths")
-    selected_architecture = tuple(base_architecture)
-    for row in audit_rows:
-        row["audit_recommended"] = row["selected"]
-        hidden_values = row["hidden_dim"]
-        if not isinstance(hidden_values, list):
-            raise TypeError("hidden_dim audit field must be a list")
-        row["selected"] = tuple(hidden_values) == selected_architecture
-    pd.DataFrame(audit_rows).to_parquet(
-        output / "architecture_audit.parquet", index=False
-    )
-    write_json(
-        output / "architecture_audit.json",
-        {
-            "candidate_architectures": [
-                list(candidate) for candidate in ARCHITECTURE_CANDIDATES
-            ],
-            "dev_seeds": list(ARCHITECTURE_DEV_SEEDS),
-            "audit_rule": "smallest model within 0.01 of best mean validation balanced accuracy",
-            "audit_recommendation": list(audit_recommendation),
-            "selection_rule": "prespecified architecture fixed before the benchmark",
-            "selected_architecture": list(selected_architecture),
-            "runs": audit_rows,
-        },
-    )
-    return MLPSpec(hidden_dim=selected_architecture, epochs=epochs)
+    LR and XGBoost use the selected configuration. The MLP keeps its
+    prespecified architecture; its selection run is reported as an audit.
+    """
 
-
-def _select_spec(data: DatasetSplit, base: ModelSpec, *, output: Path) -> ModelSpec:
-    """Tune the base configuration once per dataset on the validation split."""
-
-    selected, rows = select_base_spec(data, base)
+    recommended, rows = select_base_spec(data, base)
+    selected = prespecified or recommended
     pd.DataFrame(
         [{**row, "model_spec": json.dumps(row["model_spec"])} for row in rows]
     ).to_parquet(output / "base_config_selection.parquet", index=False)
@@ -234,12 +204,11 @@ def _select_spec(data: DatasetSplit, base: ModelSpec, *, output: Path) -> ModelS
         output / "base_config_selection.json",
         {
             "model_type": base.model_type,
-            "dev_seeds": list(ARCHITECTURE_DEV_SEEDS),
-            "selection_rule": (
-                "simplest configuration within 0.01 of the best mean validation "
-                "balanced accuracy"
-            ),
+            "dev_seeds": list(SELECTION_DEV_SEEDS),
+            "selection_rule": "lowest mean validation log-loss over the dev seeds",
+            "recommended": recommended.to_dict(),
             "selected": selected.to_dict(),
+            "prespecified": prespecified is not None,
             "runs": rows,
         },
     )
@@ -265,9 +234,10 @@ def prepare_model_bank(
     data = load_dataset(dataset, seed=split_seed, split_version=split_version)
     output.mkdir(parents=True, exist_ok=True)
     if model_type == "mlp":
-        spec: ModelSpec = _select_mlp_spec(
-            data, epochs=epochs, base_architecture=base_architecture, output=output
-        )
+        if not base_architecture or any(width <= 0 for width in base_architecture):
+            raise ValueError("base_architecture must contain positive layer widths")
+        base: ModelSpec = MLPSpec(hidden_dim=tuple(base_architecture), epochs=epochs)
+        spec = _select_spec(data, base, output=output, prespecified=base)
     else:
         spec = _select_spec(data, MODEL_SPECS[model_type](), output=output)
 

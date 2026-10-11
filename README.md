@@ -66,7 +66,9 @@ validation, 30% test; standardization fitted on the training partition) and
 trains five base MLPs with two hidden layers of 32 ReLU units (full-batch
 Adam, learning rate $10^{-3}$, at most 300 epochs, early stopping on
 validation cross-entropy with patience 30). The five runs differ only in
-initialization seed.
+initialization seed. The architecture is prespecified; an audit over five
+widths (`base_config_selection.json`) found every candidate within 0.006
+validation log-loss of the best.
 
 For every base model it then trains and saves 25 held-out variants in each of
 nine change families (225 per base model, 1,125 per dataset):
@@ -80,8 +82,8 @@ nine change families (225 per base model, 1,125 per dataset):
 | Label update | 1%, 5%, 10% of training labels flipped (9/8/8) |
 | Training configuration | 19 Adam and 6 SGD learning-rate/weight-decay settings |
 | Architecture | 25 alternative widths and depths |
-| Parameter perturbation | $\ell_\infty$ radii {0.001, 0.005, 0.01, 0.02, 0.05}, five random directions each |
-| Incremental update | one mini-batch Adam pass (batch 8, lr $10^{-3}$) from the base checkpoint over 25%, 50%, 75%, 100% of the update pool (8/8/8/1) |
+| Parameter perturbation | $\ell_\infty$ radii {0.05, 0.1, 0.2, 0.3, 0.5} × the base model's mean absolute parameter, five random directions each |
+| Incremental update | Adam fine-tuning (batch 8, lr $10^{-3}$) from the base checkpoint on a bootstrap sample of the update pool for 1, 5, 20, or 50 epochs (7/6/6/6) |
 
 All families except *new initialization* reuse the base model's
 initialization seed. Every variant is evaluated; the 3-point
@@ -93,10 +95,13 @@ difference from the base model on the test set.
 
 `--model-type logistic` or `--model-type xgboost` builds the same bank for
 another model class (`--epochs` and `--base-architecture` apply to the MLP
-only). The base configuration is selected once per dataset on the validation
-split: the simplest grid setting within 0.01 of the best mean balanced accuracy
-over three development seeds (`base_config_selection.json`). Families adapt to
-the model class:
+only). The base configuration is selected once per dataset by a rule fixed in
+advance: the grid setting with the lowest mean validation log-loss over three
+development seeds (`base_config_selection.json`). The grids are C ∈ {0.001,
+…, 100} for logistic regression, and `max_depth` ∈ {3, 4, 6} × learning rate ∈
+{0.03, 0.1} × `n_estimators` ∈ {100, 200, 400} × `min_child_weight` ∈ {1, 5}
+for XGBoost (row and column subsampling 0.8). Families adapt to the model
+class:
 
 | Family | Logistic regression | XGBoost |
 |---|---|---|
@@ -104,7 +109,7 @@ the model class:
 | Training configuration | C multipliers with L2, L1, elastic-net and class-balanced fits | learning rate, `reg_lambda`, `min_child_weight`, `gamma`, `reg_alpha`, `subsample` |
 | Architecture | not applicable | 25 nearest (`max_depth`, `n_estimators`) alternatives |
 | Parameter perturbation | coefficients and intercept | leaf values |
-| Incremental update | Adam pass through the linear torch view | 10% more trees fitted on the pool subset |
+| Incremental update | Adam fine-tuning through the linear torch view, as for the MLP | 10%, 25%, 50%, or 100% more trees fitted on the pool sample |
 
 Bootstrap, deletion, data addition, and label update are constructed exactly as
 for the MLP. `full_benchmark` skips methods the bank's model class cannot serve

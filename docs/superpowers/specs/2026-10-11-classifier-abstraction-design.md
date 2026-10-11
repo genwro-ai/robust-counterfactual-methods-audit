@@ -19,7 +19,7 @@ as n/a rather than adapted.
 | Topic | Decision |
 |---|---|
 | Method gaps | Ragged matrix. Wachter needs gradients; RNCE, AP∆S (and MCE) need a torch network. None of them runs on XGBoost. |
-| Base configuration | MLP unchanged (prespecified 32-32). LR and XGBoost are tuned once per dataset on the validation split over a small grid and frozen across the five seeds (best mean validation balanced accuracy over three dev seeds; simplest configuration within 0.01). |
+| Base configuration | A rule fixed in advance: the grid setting with the lowest mean validation log-loss over three dev seeds, chosen once per dataset and frozen across the five seeds. LR and XGBoost use it. The MLP keeps the prespecified 32-32; its run over five widths is an audit (every width was within 0.006 log-loss of the best on all four datasets). |
 | Change magnitude | Global test-set hard disagreement and probability MAE (unchanged). |
 | New family | `incremental_update`: continue training the deployed base model on a subset of the update pool, for all three classes. |
 
@@ -31,16 +31,26 @@ as n/a rather than adapted.
 | bootstrap, deletion, data_addition, label_update | shared construction (unchanged) | shared | shared |
 | training_config | 19 Adam + 6 SGD lr/wd (unchanged) | C multipliers x penalty (l2, l1, elasticnet 0.5) x class weight | learning-rate multiplier x `reg_lambda` x `min_child_weight`, plus `gamma`, `reg_alpha`, `subsample` |
 | architecture | widths/depths (unchanged) | - (no analogue) | 25 nearest (`max_depth`, `n_estimators`) pairs in a 6 x 5 grid |
-| bounded_parameter | l_inf on weights (unchanged) | l_inf on coefficients and intercept | l_inf on leaf values (our construction) |
-| incremental_update | mini-batch Adam pass from the base checkpoint | same, through the torch view | add trees fitted on the pool subset |
+| bounded_parameter | l_inf on weights | l_inf on coefficients and intercept | l_inf on leaf values (our construction) |
+| incremental_update | Adam fine-tuning from the base checkpoint | same, through the torch view | add trees fitted on the pool sample |
 
-MLP and XGBoost have 225 variants per base model, LR 175. Incremental updates
-use pool fractions 25/50/75/100% with 8/8/8/1 replicates and seeds disjoint
-from the AP∆S calibration replicas. MLP and LR use the AP∆S calibration update
-(1 epoch, batch 8, Adam lr 1e-3); XGBoost adds `max(1, round(0.1 x n_estimators))`
-trees. Bounded-parameter radii are the MLP radii {0.001, 0.005, 0.01, 0.02,
-0.05} for all classes; realized disagreement is reported, so the radii can be
-revisited once the numbers are in.
+MLP and XGBoost have 225 variants per base model, LR 175.
+
+Incremental updates continue training the base model on bootstrap samples of
+the update pool at four intensities (7/6/6/6 replicates). Seeds are disjoint
+from the AP∆S calibration replicas.
+- MLP and LR: 1, 5, 20 or 50 epochs of Adam (batch 8, lr 1e-3). The 1-epoch
+  level is the AP∆S calibration process, held out.
+- XGBoost: adds 10, 25, 50 or 100% of `n_estimators` trees.
+
+A light single pass changed too little to form a family of its own, which is
+why the levels are graded.
+
+Bounded-parameter radii are r × the base model's mean |parameter|, with r in
+{0.05, 0.1, 0.2, 0.3, 0.5}, so the l_inf box means the same relative change for
+weights, coefficients and leaves. With absolute radii, LR on Breast Cancer
+never flipped a prediction. XGBoost stays the least sensitive: random leaf
+shifts cancel across trees.
 
 ## Architecture
 

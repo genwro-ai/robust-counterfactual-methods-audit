@@ -128,7 +128,7 @@ def test_incremental_update_starts_from_the_base_model():
     spec = LogisticSpec()
     base = spec.fit(Split.X_train, Split.y_train, Split.X_val, Split.y_val, seed=1)
 
-    updated = spec.incremental_update(base, Split.X_update, Split.y_update)
+    updated = spec.incremental_update(base, Split.X_update, Split.y_update, intensity=1)
 
     distance = parameter_linf_distance(base, updated)
     assert distance is not None and 0 < distance < 0.1
@@ -137,9 +137,9 @@ def test_incremental_update_starts_from_the_base_model():
         Split.X_train, Split.y_train, Split.X_val, Split.y_val, seed=1
     )
     xgb_updated = SMALL_XGBOOST.incremental_update(
-        xgb_base, Split.X_update, Split.y_update
+        xgb_base, Split.X_update, Split.y_update, intensity=0.5
     )
-    assert xgb_updated.num_trees == xgb_base.num_trees + 1
+    assert xgb_updated.num_trees == xgb_base.num_trees + 2
 
 
 def test_betarce_ensemble_member_uses_spec():
@@ -151,13 +151,35 @@ def test_betarce_ensemble_member_uses_spec():
     assert member.seed == 3
 
 
-def test_select_base_spec_picks_simplest_within_tolerance():
+def test_select_base_spec_picks_lowest_validation_log_loss():
     selected, rows = select_base_spec(Split(), LogisticSpec(), seeds=(1,))
 
     assert isinstance(selected, LogisticSpec)
     assert sum(row["selected"] for row in rows) == 1
-    winners = [row for row in rows if row["within_tolerance"]]
-    assert selected.C == min(row["model_spec"]["C"] for row in winners)
+    best = min(rows, key=lambda row: row["mean_validation_log_loss"])
+    assert selected.C == best["model_spec"]["C"]
+
+
+def test_bank_uses_relative_radii_and_graded_incremental_levels():
+    spec = LogisticSpec()
+    base = spec.fit(Split.X_train, Split.y_train, Split.X_val, Split.y_val, seed=1)
+
+    changes = make_changed_models(Split(), base, base_seed=1, spec=spec)
+
+    scale = spec.parameter_scale(base)
+    for change in changes:
+        if change.change_family == "bounded_parameter":
+            relative = change.metadata["relative_parameter_radius"]
+            assert change.change_level == f"relative_linf_{relative:g}"
+            assert parameter_linf_distance(base, change.model) == pytest.approx(
+                relative * scale, rel=1e-4
+            )
+    levels = Counter(
+        change.change_level
+        for change in changes
+        if change.change_family == "incremental_update"
+    )
+    assert levels == {"epochs_1": 7, "epochs_5": 6, "epochs_20": 6, "epochs_50": 6}
 
 
 def test_spec_serialization_round_trip():

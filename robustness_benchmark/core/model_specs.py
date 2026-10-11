@@ -18,9 +18,9 @@ from robustness_benchmark.core.classifiers import (
 )
 
 FULL_VARIANTS_PER_FAMILY = 25
-INCREMENTAL_UPDATE_EPOCHS = 1
-INCREMENTAL_UPDATE_BATCH_SIZE = 8
-INCREMENTAL_UPDATE_LEARNING_RATE = 1e-3
+# Bounded-parameter radii as fractions of the base model's mean |parameter|,
+# so the l_inf box means the same relative change for weights and leaves.
+RELATIVE_PARAMETER_RADII = (0.05, 0.1, 0.2, 0.3, 0.5)
 
 ADAM_TRAINING_CONFIGS = tuple(
     ("adam", learning_rate, weight_decay)
@@ -82,13 +82,15 @@ LOGISTIC_TRAINING_CONFIGS: tuple[tuple[float, float, str | None], ...] = (
     *((multiplier, 0.5, None) for multiplier in (0.3, 1, 3, 10, 30)),
     *((multiplier, 0.0, "balanced") for multiplier in (0.1, 0.3, 1, 3, 10)),
 )
-LOGISTIC_SELECTION_C = (0.01, 0.1, 1.0, 10.0, 100.0)
+LOGISTIC_SELECTION_C = (0.001, 0.01, 0.1, 1.0, 10.0, 100.0)
+MLP_SELECTION_ARCHITECTURES = ((16, 16), (32, 16), (32, 32), (64, 32), (64, 64))
 
 XGBOOST_ARCHITECTURE_DEPTHS = (2, 3, 4, 5, 6, 8)
 XGBOOST_ARCHITECTURE_ESTIMATORS = (50, 100, 200, 300, 500)
-XGBOOST_SELECTION_DEPTHS = (2, 3, 4, 6)
-XGBOOST_SELECTION_ESTIMATORS = (50, 100, 200)
-XGBOOST_SELECTION_LEARNING_RATES = (0.05, 0.1, 0.3)
+XGBOOST_SELECTION_DEPTHS = (3, 4, 6)
+XGBOOST_SELECTION_LEARNING_RATES = (0.03, 0.1)
+XGBOOST_SELECTION_ESTIMATORS = (100, 200, 400)
+XGBOOST_SELECTION_MIN_CHILD_WEIGHTS = (1.0, 5.0)
 
 
 def _scaled_uniform_direction(
@@ -129,9 +131,9 @@ def torch_incremental_update(
     X: pd.DataFrame,
     y: pd.Series,
     *,
-    epochs: int = INCREMENTAL_UPDATE_EPOCHS,
-    batch_size: int = INCREMENTAL_UPDATE_BATCH_SIZE,
-    learning_rate: float = INCREMENTAL_UPDATE_LEARNING_RATE,
+    epochs: int = 1,
+    batch_size: int = 8,
+    learning_rate: float = 1e-3,
     weight_decay: float = 0.0,
 ) -> TorchBinaryModel:
     """Return a copy updated by mini-batch Adam passes over ``(X, y)`` in order."""
@@ -172,6 +174,9 @@ class ModelSpec(ABC):
 
     model_type: ClassVar[str]
     change_families: ClassVar[tuple[str, ...]]
+    # Incremental-update intensities, from a light refresh to a heavy one.
+    incremental_unit: ClassVar[str]
+    incremental_intensities: ClassVar[tuple[float, ...]]
 
     @abstractmethod
     def build(self, input_dim: int, seed: int) -> Classifier:
@@ -224,6 +229,10 @@ class ModelSpec(ABC):
         return []
 
     @abstractmethod
+    def parameter_scale(self, model: Classifier) -> float:
+        """Mean absolute value of the parameters ``perturb_parameters`` moves."""
+
+    @abstractmethod
     def perturb_parameters(
         self, model: Classifier, *, radius: float, seed: int
     ) -> Classifier:
@@ -231,7 +240,7 @@ class ModelSpec(ABC):
 
     @abstractmethod
     def incremental_update(
-        self, model: Classifier, X: pd.DataFrame, y: pd.Series
+        self, model: Classifier, X: pd.DataFrame, y: pd.Series, *, intensity: float
     ) -> Classifier:
         """Return a copy of ``model`` that continued training on ``(X, y)``."""
 
@@ -241,28 +250,40 @@ class ModelSpec(ABC):
 
         return [base]
 
-    def complexity(self) -> tuple[float, ...]:
-        """Order used to prefer the simpler of two equally good candidates."""
-
-        return ()
-
 
 class _TorchSpec(ModelSpec):
-    """Perturbation and incremental updates through the torch network."""
+    """Perturbation and incremental updates through the torch network.
+
+    Incremental updates are Adam fine-tuning passes (batch 8, learning rate
+    1e-3, as in the APAS calibration) from the base checkpoint.
+    """
+
+    incremental_unit = "epochs"
+    incremental_intensities = (1, 5, 20, 50)
+
+    @staticmethod
+    def _network(model: Classifier) -> TorchBinaryModel:
+        if not isinstance(model, TorchBinaryModel):
+            raise TypeError("expected a torch network")
+        return model
+
+    def parameter_scale(self, model: Classifier) -> float:
+        parameters = self._network(model).get_torch_model().parameters()
+        return float(
+            torch.cat([p.detach().abs().reshape(-1) for p in parameters]).mean()
+        )
 
     def perturb_parameters(
         self, model: Classifier, *, radius: float, seed: int
     ) -> Classifier:
-        if not isinstance(model, TorchBinaryModel):
-            raise TypeError("expected a torch network")
-        return perturb_torch_parameters(model, radius=radius, seed=seed)
+        return perturb_torch_parameters(self._network(model), radius=radius, seed=seed)
 
     def incremental_update(
-        self, model: Classifier, X: pd.DataFrame, y: pd.Series
+        self, model: Classifier, X: pd.DataFrame, y: pd.Series, *, intensity: float
     ) -> Classifier:
-        if not isinstance(model, TorchBinaryModel):
-            raise TypeError("expected a torch network")
-        return torch_incremental_update(model, X, y)
+        return torch_incremental_update(
+            self._network(model), X, y, epochs=int(intensity)
+        )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -329,6 +350,10 @@ class MLPSpec(_TorchSpec):
             for architecture in alternatives
         ]
 
+    @classmethod
+    def selection_grid(cls, base: "MLPSpec") -> list["MLPSpec"]:
+        return [base.with_overrides(hidden_dim=h) for h in MLP_SELECTION_ARCHITECTURES]
+
 
 @dataclasses.dataclass(frozen=True)
 class LogisticSpec(_TorchSpec):
@@ -390,15 +415,15 @@ class LogisticSpec(_TorchSpec):
     def selection_grid(cls, base: "LogisticSpec") -> list["LogisticSpec"]:
         return [base.with_overrides(C=C) for C in LOGISTIC_SELECTION_C]
 
-    def complexity(self) -> tuple[float, ...]:
-        # Stronger regularization (smaller C) is the simpler model.
-        return (self.C,)
-
 
 @dataclasses.dataclass(frozen=True)
 class XGBoostSpec(ModelSpec):
+    """Gradient-boosted trees; incremental updates add trees fitted on new data."""
+
     model_type = "xgboost"
     change_families = MLPSpec.change_families
+    incremental_unit = "added_tree_fraction"
+    incremental_intensities = (0.1, 0.25, 0.5, 1.0)
 
     n_estimators: int = 100
     max_depth: int = 3
@@ -475,41 +500,46 @@ class XGBoostSpec(ModelSpec):
             for depth, estimators in nearest[:FULL_VARIANTS_PER_FAMILY]
         ]
 
+    @staticmethod
+    def _booster(model: Classifier) -> XGBoostClassifier:
+        if not isinstance(model, XGBoostClassifier):
+            raise TypeError("expected an XGBoostClassifier")
+        return model
+
+    def parameter_scale(self, model: Classifier) -> float:
+        return float(np.abs(self._booster(model).leaf_values()).mean())
+
     def perturb_parameters(
         self, model: Classifier, *, radius: float, seed: int
     ) -> Classifier:
-        if not isinstance(model, XGBoostClassifier):
-            raise TypeError("expected an XGBoostClassifier")
         if radius <= 0:
             raise ValueError("radius must be positive")
-        leaves = model.leaf_values()
+        booster = self._booster(model)
         (direction,) = _scaled_uniform_direction(
-            [torch.Size([len(leaves)])], radius, seed
+            [torch.Size([len(booster.leaf_values())])], radius, seed
         )
-        return model.with_leaf_offsets(direction.double().numpy())
+        return booster.with_leaf_offsets(direction.double().numpy())
 
     def incremental_update(
-        self, model: Classifier, X: pd.DataFrame, y: pd.Series
+        self, model: Classifier, X: pd.DataFrame, y: pd.Series, *, intensity: float
     ) -> Classifier:
-        if not isinstance(model, XGBoostClassifier):
-            raise TypeError("expected an XGBoostClassifier")
-        return model.continue_training(
-            X, y, rounds=max(1, round(0.1 * self.n_estimators))
-        )
+        rounds = max(1, round(intensity * self.n_estimators))
+        return self._booster(model).continue_training(X, y, rounds=rounds)
 
     @classmethod
     def selection_grid(cls, base: "XGBoostSpec") -> list["XGBoostSpec"]:
         return [
             base.with_overrides(
-                max_depth=depth, n_estimators=estimators, learning_rate=learning_rate
+                max_depth=depth,
+                learning_rate=learning_rate,
+                n_estimators=estimators,
+                min_child_weight=min_child_weight,
             )
             for depth in XGBOOST_SELECTION_DEPTHS
-            for estimators in XGBOOST_SELECTION_ESTIMATORS
             for learning_rate in XGBOOST_SELECTION_LEARNING_RATES
+            for estimators in XGBOOST_SELECTION_ESTIMATORS
+            for min_child_weight in XGBOOST_SELECTION_MIN_CHILD_WEIGHTS
         ]
-
-    def complexity(self) -> tuple[float, ...]:
-        return (self.max_depth, self.n_estimators, self.learning_rate)
 
 
 MODEL_SPECS: dict[str, type[ModelSpec]] = {
