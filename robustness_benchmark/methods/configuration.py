@@ -174,6 +174,44 @@ LOCKED_CONFIGS: dict[str, dict[str, object]] = {
     },
 }
 
+# A deliberate deviation from the authors' settings. BetaRCE's config_exp.yaml
+# stops every growing-spheres search after 100 shells of width 0.1, so no
+# candidate lies further than 10 from the factual in standardised units, and
+# in 30 dimensions random directions rarely reach a boundary beyond about half
+# that radius. Where this left RobX without a start counterfactual (Breast
+# Cancer on every model class, HELOC on the MLP), every growing-spheres search
+# runs up to CARLA's 1,000 shells instead. Shell width and samples per shell
+# are unchanged, so each search is the same up to shell 100.
+EXTENDED_GS_MAX_ITER = 1_000
+EXTENDED_GS_SEARCH: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("breast_cancer", "logistic"),
+        ("breast_cancer", "mlp"),
+        ("breast_cancer", "xgboost"),
+        ("heloc", "mlp"),
+    }
+)
+# The settings that cap a method's growing-spheres shells. RobX's own
+# ``max_iter`` counts interpolation steps and stays as it is.
+GS_MAX_ITER_KEYS: dict[str, tuple[str, ...]] = {
+    **{method: ("max_iter",) for method in GROWING_SPHERES_TARGETS},
+    "betarce": ("base_gs_max_iter", "gs_max_iter"),
+    **{method: ("gs_max_iter",) for method in ROBX_METHODS},
+}
+
+
+def locked_config(
+    method: str, dataset: str | None = None, model_type: str | None = None
+) -> dict[str, object]:
+    """A fixed method's settings for one dataset and model class."""
+
+    config = dict(LOCKED_CONFIGS.get(method, {}))
+    if (dataset, model_type) in EXTENDED_GS_SEARCH:
+        for key in GS_MAX_ITER_KEYS.get(method, ()):
+            config[key] = EXTENDED_GS_MAX_ITER
+    return config
+
+
 ROAR_LAMBDAS = (0.0005, 0.001, 0.005, *np.arange(0.01, 1.1, 0.05))
 
 TUNING_GRIDS: dict[str, list[dict[str, object]]] = {

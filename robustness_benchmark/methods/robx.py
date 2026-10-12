@@ -17,7 +17,8 @@ assigns it the counterfactual's class.
 Its settings (``LOCKED_CONFIGS``) are k = 3 conservative counterfactuals and
 100 iterations (Algorithm 1; BetaRCE's ``robx_algorithm`` defaults), and
 growing spheres with 100 samples, p = 2, step 0.1 and 100 iterations (``gs``
-in BetaRCE's configs/config_exp.yaml).
+in BetaRCE's configs/config_exp.yaml), extended to 1,000 iterations where
+that limit left RobX without a start (``EXTENDED_GS_SEARCH``).
 """
 
 from collections.abc import Callable

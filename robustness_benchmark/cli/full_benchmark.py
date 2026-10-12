@@ -113,6 +113,7 @@ def main() -> None:
         methods=methods,
         tuning_factuals=args.tuning_factuals,
         tuning_base_seed=tuning_base_seed,
+        model_type=spec.model_type,
         frozen_tuning=args.frozen_tuning,
     )
 

@@ -18,7 +18,11 @@ from robustness_benchmark.methods.calibration import (
     APAS_CALIBRATION_PROTOCOL_VERSION,
     apas_method_config,
 )
-from robustness_benchmark.methods.configuration import LOCKED_CONFIGS, TUNING_GRIDS
+from robustness_benchmark.methods.configuration import (
+    LOCKED_CONFIGS,
+    TUNING_GRIDS,
+    locked_config,
+)
 
 
 def test_tuning_selects_by_validity_then_cost_without_changed_models():
@@ -158,6 +162,37 @@ def test_frozen_tuning_reuses_grids_but_refreshes_fixed_configs(tmp_path):
     assert configs["rnce"] == LOCKED_CONFIGS["rnce"]
     assert report["protocol"]["base_seed"] == 2026
     assert report["protocol"]["frozen_source_sha256"]
+
+
+def test_cached_growing_spheres_limit_must_match_the_dataset():
+    extended = locked_config("robx_robust", "breast_cancer", "mlp")
+    authors = LOCKED_CONFIGS["robx_robust"]
+
+    assert tuning_config_is_current("robx_robust", extended, "breast_cancer", "mlp")
+    assert not tuning_config_is_current("robx_robust", authors, "breast_cancer", "mlp")
+    assert tuning_config_is_current("robx_robust", authors, "adult", "mlp")
+    assert not tuning_config_is_current("robx_robust", extended, "adult", "mlp")
+
+
+def test_frozen_tuning_applies_the_dataset_growing_spheres_limit(tmp_path):
+    path = tmp_path / "tuning.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tuning_protocol_version": "validation_v3_gower_cost",
+                "selected_configs": {"wachter": TUNING_GRIDS["wachter"][0]},
+                "report": {"protocol": {"base_seed": 2026}, "methods": {}},
+            }
+        )
+    )
+
+    configs, _ = configs_from_frozen_tuning(
+        path, ["wachter", "betarce"], "breast_cancer", "logistic"
+    )
+
+    assert configs["wachter"] == TUNING_GRIDS["wachter"][0]
+    assert configs["betarce"] == locked_config("betarce", "breast_cancer", "logistic")
+    assert configs["betarce"] != LOCKED_CONFIGS["betarce"]
 
 
 def test_summary_inputs_keep_only_current_protocol_rows(tmp_path):

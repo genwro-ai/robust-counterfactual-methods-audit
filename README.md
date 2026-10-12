@@ -228,6 +228,14 @@ Method settings (`robustness_benchmark/methods/configuration.py`):
   spheres that accept a candidate only once the base model's favorable-class
   probability reaches 0.6 to 0.9; they trace the robustness–distance frontier
   a robust method has to beat.
+- **Extended growing-spheres search** (a deviation from the authors'
+  settings): 100 shells of width 0.1 never look further than 10 from the
+  factual, and in 30 dimensions random directions rarely reach a boundary
+  beyond about half that. Where this left RobX without a start counterfactual
+  (Breast Cancer on every model class, HELOC on the MLP), every
+  growing-spheres search above (growing spheres, the margin baselines, both
+  BetaRCE stages and RobX's start) runs up to 1,000 shells, CARLA's default;
+  see `EXTENDED_GS_SEARCH` in `methods/configuration.py`.
 
 Wachter, RNCE, AP$\Delta$S, and T:Rex need gradients or network weights and do
 not run on XGBoost; ROAR needs a linear model.

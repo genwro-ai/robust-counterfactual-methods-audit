@@ -18,7 +18,7 @@ from robustness_benchmark.core.factuals import select_factuals
 from robustness_benchmark.core.model_bank import load_base_model, model_bank_fingerprint
 from robustness_benchmark.core.protocol import TUNING_FACTUALS_SEED_OFFSET
 from robustness_benchmark.core.provenance import file_sha256, write_json
-from robustness_benchmark.methods.configuration import LOCKED_CONFIGS, TUNING_GRIDS
+from robustness_benchmark.methods.configuration import TUNING_GRIDS, locked_config
 from robustness_benchmark.methods.registry import generate_counterfactuals, make_task
 
 TUNING_PROTOCOL_VERSION = "validation_v3_gower_cost"
@@ -69,10 +69,11 @@ def tune_methods(
     methods: list[str],
     tuning_factuals: int,
     base_seed: int,
+    model_type: str | None = None,
 ) -> tuple[dict[str, dict[str, object]], dict[str, object]]:
     configs: dict[str, dict[str, object]] = {}
     for method in methods:
-        configs[method] = dict(LOCKED_CONFIGS.get(method, {}))
+        configs[method] = locked_config(method, data.name, model_type)
     base_id, base_model = load_base_model(bank, base_seed)
     factuals, _, _ = select_factuals(
         base_model,
@@ -132,7 +133,12 @@ def tune_methods(
     return configs, report
 
 
-def tuning_config_is_current(method: str, config: object) -> bool:
+def tuning_config_is_current(
+    method: str,
+    config: object,
+    dataset: str | None = None,
+    model_type: str | None = None,
+) -> bool:
     """Return whether a cached method config belongs to the current protocol."""
 
     if not isinstance(config, dict):
@@ -140,7 +146,7 @@ def tuning_config_is_current(method: str, config: object) -> bool:
     grid = TUNING_GRIDS.get(method)
     if grid is not None:
         return config in grid
-    return config == LOCKED_CONFIGS.get(method, {})
+    return config == locked_config(method, dataset, model_type)
 
 
 def tuning_protocol_is_reusable(
@@ -161,7 +167,10 @@ def tuning_protocol_is_reusable(
 
 
 def configs_from_frozen_tuning(
-    path: Path, methods: list[str]
+    path: Path,
+    methods: list[str],
+    dataset: str | None = None,
+    model_type: str | None = None,
 ) -> tuple[dict[str, dict[str, object]], dict[str, object]]:
     """Load only genuinely tuned settings and refresh every fixed configuration."""
 
@@ -190,7 +199,7 @@ def configs_from_frozen_tuning(
             configs[method] = dict(cached)
             method_report[method] = source_method_report.get(method, {})
         else:
-            configs[method] = dict(LOCKED_CONFIGS.get(method, {}))
+            configs[method] = locked_config(method, dataset, model_type)
             method_report[method] = {
                 "selection": "fixed published/upstream setting or parameter-free",
                 "selected": configs[method],
@@ -215,6 +224,7 @@ def resolve_configs(
     methods: list[str],
     tuning_factuals: int,
     tuning_base_seed: int,
+    model_type: str | None = None,
     frozen_tuning: Path | None = None,
 ) -> dict[str, dict[str, object]]:
     """Every method's configuration, recorded in output/tuning.json.
@@ -225,7 +235,9 @@ def resolve_configs(
 
     tuning_path = output / "tuning.json"
     if frozen_tuning is not None:
-        configs, report = configs_from_frozen_tuning(frozen_tuning, methods)
+        configs, report = configs_from_frozen_tuning(
+            frozen_tuning, methods, data.name, model_type
+        )
     else:
         cached = json.loads(tuning_path.read_text()) if tuning_path.is_file() else {}
         reusable_protocol = tuning_protocol_is_reusable(
@@ -235,13 +247,15 @@ def resolve_configs(
         reusable = {
             method
             for method in methods
-            if tuning_config_is_current(method, cached_configs.get(method))
+            if tuning_config_is_current(
+                method, cached_configs.get(method), data.name, model_type
+            )
         }
         to_tune = [method for method in methods if method not in reusable]
         if not to_tune:
             return {method: dict(cached_configs[method]) for method in methods}
         fresh_configs, fresh_report = tune_methods(
-            bank, data, to_tune, tuning_factuals, tuning_base_seed
+            bank, data, to_tune, tuning_factuals, tuning_base_seed, model_type
         )
         configs = {
             method: dict(cached_configs[method])

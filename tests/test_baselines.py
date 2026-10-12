@@ -9,10 +9,12 @@ from robustness_benchmark.core.classifiers import (
     XGBoostClassifier,
 )
 from robustness_benchmark.methods.configuration import (
+    EXTENDED_GS_MAX_ITER,
     GROWING_SPHERES_TARGETS,
     LOCKED_CONFIGS,
     TUNING_GRIDS,
     default_config,
+    locked_config,
 )
 from robustness_benchmark.methods.registry import (
     UnsupportedModelError,
@@ -87,6 +89,73 @@ def test_margin_variants_meet_their_threshold_at_growing_distance():
 
     assert mean_distances == sorted(mean_distances)
     assert mean_distances[-1] > mean_distances[0] + 1.0
+
+
+@pytest.mark.parametrize(
+    ("dataset", "model_type"),
+    [
+        ("breast_cancer", "logistic"),
+        ("breast_cancer", "mlp"),
+        ("breast_cancer", "xgboost"),
+        ("heloc", "mlp"),
+    ],
+)
+def test_every_growing_spheres_search_is_extended_where_robx_ran_out(
+    dataset, model_type
+):
+    gs_limits = {
+        **{method: ("max_iter",) for method in GROWING_SPHERES_TARGETS},
+        "betarce": ("base_gs_max_iter", "gs_max_iter"),
+        "robx_balanced": ("gs_max_iter",),
+        "robx_robust": ("gs_max_iter",),
+    }
+
+    for method, locked in LOCKED_CONFIGS.items():
+        config = locked_config(method, dataset, model_type)
+        extended = gs_limits.get(method, ())
+        assert {key: config[key] for key in extended} == {
+            key: EXTENDED_GS_MAX_ITER for key in extended
+        }
+        assert {k: v for k, v in config.items() if k not in extended} == {
+            k: v for k, v in locked.items() if k not in extended
+        }
+    assert locked_config("robx_balanced", dataset, model_type)["max_iter"] == 100
+
+
+@pytest.mark.parametrize(
+    ("dataset", "model_type"),
+    [("heloc", "logistic"), ("heloc", "xgboost"), ("adult", "mlp"), (None, None)],
+)
+def test_other_datasets_keep_the_authors_growing_spheres_limit(dataset, model_type):
+    for method, locked in LOCKED_CONFIGS.items():
+        assert locked_config(method, dataset, model_type) == locked
+
+
+def test_extended_search_reaches_a_boundary_the_authors_limit_cannot():
+    # 30 features with the boundary 8 away: 100 shells of width 0.1 almost
+    # never sample that far out in this dimension, 1,000 shells do.
+    n_features = 30
+    model = hand_made_logistic([1.0] + [0.0] * (n_features - 1), -8.0)
+    columns = [f"x{i}" for i in range(n_features)]
+    X = pd.DataFrame(np.zeros((2, n_features)), columns=columns)
+    task = make_task(model, X, pd.Series([0, 1]), seed=0)
+    factuals = X.iloc[:2]
+
+    _, authors = generate_counterfactuals(
+        "growing_spheres",
+        task,
+        factuals,
+        method_config=LOCKED_CONFIGS["growing_spheres"],
+    )
+    _, extended = generate_counterfactuals(
+        "growing_spheres",
+        task,
+        factuals,
+        method_config=locked_config("growing_spheres", "breast_cancer", "logistic"),
+    )
+
+    assert [row["generation_status"] for row in authors] == ["no_counterfactual"] * 2
+    assert [row["generation_status"] for row in extended] == ["success"] * 2
 
 
 def test_roar_runs_on_logistic_regression():
