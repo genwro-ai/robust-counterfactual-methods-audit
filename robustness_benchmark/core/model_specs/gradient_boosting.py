@@ -12,8 +12,8 @@ from robustness_benchmark.core.classifiers import Classifier, XGBoostClassifier
 from robustness_benchmark.core.model_specs.base import ALL_CHANGE_FAMILIES, ModelSpec
 from robustness_benchmark.core.model_specs.torch import scaled_uniform_direction
 
-XGBOOST_ARCHITECTURE_DEPTHS = (2, 3, 4, 5, 6, 8)
-XGBOOST_ARCHITECTURE_ESTIMATORS = (50, 100, 200, 300, 500)
+XGBOOST_ARCHITECTURE_DEPTHS = (1, 2, 3, 4, 5, 6, 8)
+XGBOOST_ARCHITECTURE_ESTIMATORS = (25, 50, 100, 200, 300, 500, 800)
 XGBOOST_SELECTION_DEPTHS = (3, 4, 6)
 XGBOOST_SELECTION_LEARNING_RATES = (0.03, 0.1)
 XGBOOST_SELECTION_ESTIMATORS = (100, 200, 400)

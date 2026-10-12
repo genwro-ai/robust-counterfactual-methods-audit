@@ -141,7 +141,7 @@ adapt to the model class:
 |---|---|---|
 | New initialization | not applicable (deterministic fit) | 25 seeds; row and column subsampling 0.8 |
 | Training configuration | C from $10^{-3}$ to 100 with L2, L1, and elastic-net penalties, with and without class balancing | learning rate, `reg_lambda`, `min_child_weight`, `gamma`, `reg_alpha`, `subsample` |
-| Architecture | not applicable | nearest (`max_depth`, `n_estimators`) alternatives |
+| Architecture | not applicable | nearest (`max_depth`, `n_estimators`) alternatives on {1, 2, 3, 4, 5, 6, 8} × {25, 50, 100, 200, 300, 500, 800} |
 | Parameter perturbation | coefficients and intercept | leaf values |
 | Incremental update | not applicable (a warm start reaches the same optimum as retraining) | continued boosting on the training set plus pool subset, early-stopped on validation log-loss (at most `n_estimators` new trees) |
 
