@@ -160,7 +160,10 @@ def test_a_run_that_never_reaches_the_authors_limit_is_unchanged():
         "gs_margin_90",
         task,
         factuals,
-        method_config={**LOCKED_CONFIGS["gs_margin_90"], "max_iter": 1_000},
+        method_config={
+            **LOCKED_CONFIGS["gs_margin_90"],
+            "max_iter": EXTENDED_GS_MAX_ITER,
+        },
     )
 
     assert [row["generation_status"] for row in authors_rows] == ["success"] * 10
@@ -169,7 +172,7 @@ def test_a_run_that_never_reaches_the_authors_limit_is_unchanged():
 
 def test_extended_search_reaches_a_boundary_the_authors_limit_cannot():
     # 30 features with the boundary 8 away: 100 shells of width 0.1 almost
-    # never sample that far out in this dimension, 1,000 shells do.
+    # never sample that far out in this dimension, 300 shells do.
     n_features = 30
     model = hand_made_logistic([1.0] + [0.0] * (n_features - 1), -8.0)
     columns = [f"x{i}" for i in range(n_features)]

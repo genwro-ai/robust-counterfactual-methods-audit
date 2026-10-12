@@ -232,12 +232,13 @@ Method settings (`robustness_benchmark/methods/configuration.py`):
   settings): 100 shells of width 0.1 never look further than 10 from the
   factual, and in 30 dimensions random directions rarely reach a boundary
   beyond about half that. Each growing-spheres search (growing spheres, the
-  margin baselines, both BetaRCE stages and RobX's start) runs up to 1,000
-  shells, CARLA's default, on the datasets where 100 shells left it without a
-  counterfactual (`EXTENDED_GS_SEARCH` in `methods/configuration.py`). A search
-  draws the same candidates until it gives up, so runs that never reached
-  shell 100 are identical under either limit: this equals 1,000 shells
-  everywhere.
+  margin baselines, both BetaRCE stages and RobX's start) runs up to 300
+  shells (radius 30) on the datasets where 100 shells left it without a
+  counterfactual (`EXTENDED_GS_SEARCH` in `methods/configuration.py`); that
+  reaches past the nearest favorable training point of every Breast Cancer
+  factual. A search draws the same candidates until it gives up, so runs that
+  never reached shell 100 are identical under either limit: this equals 300
+  shells everywhere.
 - **Longer AP$\Delta$S budget**: one minute instead of 30 s per counterfactual
   on the MLP datasets where AP$\Delta$S timed out (Breast Cancer, German
   credit, HELOC, Taiwan default, Wine quality; `EXTENDED_APAS_WALL_TIME`).

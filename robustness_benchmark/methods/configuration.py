@@ -187,12 +187,15 @@ GS_METHODS = frozenset(GS_MAX_ITER_KEYS)
 # stops every growing-spheres search after 100 shells of width 0.1, so no
 # candidate lies further than 10 from the factual in standardised units, and
 # in 30 dimensions random directions rarely reach a boundary beyond about half
-# that radius. Each method below runs up to CARLA's 1,000 shells on the
-# datasets where 100 shells left it without a counterfactual. Shell width and
-# samples per shell are unchanged, and a search draws the same candidates
+# that radius. Each method below runs up to 300 shells (radius 30) on the
+# datasets where 100 shells left it without a counterfactual. 300 shells reach
+# a boundary 15 away in 30 dimensions with 99% probability, beyond the 12.9
+# from any Breast Cancer factual to its nearest favourable training point;
+# further out every feature moves more than 5 standard deviations. Shell width
+# and samples per shell are unchanged, and a search draws the same candidates
 # until it gives up, so a run that never reached shell 100 is identical under
-# either limit: this list is equivalent to 1,000 shells everywhere.
-EXTENDED_GS_MAX_ITER = 1_000
+# either limit: this list is equivalent to 300 shells everywhere.
+EXTENDED_GS_MAX_ITER = 300
 EXTENDED_GS_SEARCH: dict[tuple[str, str], frozenset[str]] = {
     ("breast_cancer", "logistic"): GS_METHODS,
     ("breast_cancer", "mlp"): GS_METHODS,
