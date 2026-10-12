@@ -193,7 +193,7 @@ Method settings (`robustness_benchmark/methods/configuration.py`):
   bound so that it is sound for standardized (negative) inputs.
 - **AP$\Delta$S**: the authors' iterative MCE margin search with
   $\alpha=0.999$, $R=0.995$ (1,378 sampled perturbations) and a 30 s wall-time
-  limit per request. Its $\ell_\infty$ radius is calibrated per base model as
+  limit per request (one minute where it timed out; see below). Its $\ell_\infty$ radius is calibrated per base model as
   the maximum parameter distance over ten one-epoch incremental updates from
   the base checkpoint on bootstrap samples of the update pool (Adam,
   learning rate $10^{-3}$, batch size 8). Because the search reuses its
