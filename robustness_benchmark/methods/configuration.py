@@ -174,23 +174,6 @@ LOCKED_CONFIGS: dict[str, dict[str, object]] = {
     },
 }
 
-# A deliberate deviation from the authors' settings. BetaRCE's config_exp.yaml
-# stops every growing-spheres search after 100 shells of width 0.1, so no
-# candidate lies further than 10 from the factual in standardised units, and
-# in 30 dimensions random directions rarely reach a boundary beyond about half
-# that radius. Where this left RobX without a start counterfactual (Breast
-# Cancer on every model class, HELOC on the MLP), every growing-spheres search
-# runs up to CARLA's 1,000 shells instead. Shell width and samples per shell
-# are unchanged, so each search is the same up to shell 100.
-EXTENDED_GS_MAX_ITER = 1_000
-EXTENDED_GS_SEARCH: frozenset[tuple[str, str]] = frozenset(
-    {
-        ("breast_cancer", "logistic"),
-        ("breast_cancer", "mlp"),
-        ("breast_cancer", "xgboost"),
-        ("heloc", "mlp"),
-    }
-)
 # The settings that cap a method's growing-spheres shells. RobX's own
 # ``max_iter`` counts interpolation steps and stays as it is.
 GS_MAX_ITER_KEYS: dict[str, tuple[str, ...]] = {
@@ -198,6 +181,45 @@ GS_MAX_ITER_KEYS: dict[str, tuple[str, ...]] = {
     "betarce": ("base_gs_max_iter", "gs_max_iter"),
     **{method: ("gs_max_iter",) for method in ROBX_METHODS},
 }
+GS_METHODS = frozenset(GS_MAX_ITER_KEYS)
+
+# A deliberate deviation from the authors' settings. BetaRCE's config_exp.yaml
+# stops every growing-spheres search after 100 shells of width 0.1, so no
+# candidate lies further than 10 from the factual in standardised units, and
+# in 30 dimensions random directions rarely reach a boundary beyond about half
+# that radius. Each method below runs up to CARLA's 1,000 shells on the
+# datasets where 100 shells left it without a counterfactual. Shell width and
+# samples per shell are unchanged, and a search draws the same candidates
+# until it gives up, so a run that never reached shell 100 is identical under
+# either limit: this list is equivalent to 1,000 shells everywhere.
+EXTENDED_GS_MAX_ITER = 1_000
+EXTENDED_GS_SEARCH: dict[tuple[str, str], frozenset[str]] = {
+    ("breast_cancer", "logistic"): GS_METHODS,
+    ("breast_cancer", "mlp"): GS_METHODS,
+    ("breast_cancer", "xgboost"): GS_METHODS,
+    ("heloc", "mlp"): GS_METHODS,
+    ("heloc", "xgboost"): frozenset(
+        {"gs_margin_70", "gs_margin_80", "gs_margin_90", "betarce"}
+    ),
+    ("german_credit", "mlp"): frozenset({"gs_margin_90"}),
+    ("german_credit", "xgboost"): frozenset({"gs_margin_90"}),
+    ("taiwan_default", "logistic"): frozenset({"gs_margin_80", "gs_margin_90"}),
+    ("taiwan_default", "mlp"): frozenset({"gs_margin_80", "gs_margin_90"}),
+    ("taiwan_default", "xgboost"): frozenset({"gs_margin_90"}),
+    ("adult", "xgboost"): frozenset({"betarce"}),
+}
+# APΔS gets one minute instead of 30 seconds per counterfactual on the
+# datasets where it timed out.
+EXTENDED_APAS_WALL_TIME_SECONDS = 60.0
+EXTENDED_APAS_WALL_TIME: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("breast_cancer", "mlp"),
+        ("german_credit", "mlp"),
+        ("heloc", "mlp"),
+        ("taiwan_default", "mlp"),
+        ("wine_quality", "mlp"),
+    }
+)
 
 
 def locked_config(
@@ -206,9 +228,11 @@ def locked_config(
     """A fixed method's settings for one dataset and model class."""
 
     config = dict(LOCKED_CONFIGS.get(method, {}))
-    if (dataset, model_type) in EXTENDED_GS_SEARCH:
-        for key in GS_MAX_ITER_KEYS.get(method, ()):
+    if method in EXTENDED_GS_SEARCH.get((dataset, model_type), ()):
+        for key in GS_MAX_ITER_KEYS[method]:
             config[key] = EXTENDED_GS_MAX_ITER
+    if method == "apas" and (dataset, model_type) in EXTENDED_APAS_WALL_TIME:
+        config["wall_time_seconds"] = EXTENDED_APAS_WALL_TIME_SECONDS
     return config
 
 

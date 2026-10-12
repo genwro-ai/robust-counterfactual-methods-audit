@@ -231,11 +231,16 @@ Method settings (`robustness_benchmark/methods/configuration.py`):
 - **Extended growing-spheres search** (a deviation from the authors'
   settings): 100 shells of width 0.1 never look further than 10 from the
   factual, and in 30 dimensions random directions rarely reach a boundary
-  beyond about half that. Where this left RobX without a start counterfactual
-  (Breast Cancer on every model class, HELOC on the MLP), every
-  growing-spheres search above (growing spheres, the margin baselines, both
-  BetaRCE stages and RobX's start) runs up to 1,000 shells, CARLA's default;
-  see `EXTENDED_GS_SEARCH` in `methods/configuration.py`.
+  beyond about half that. Each growing-spheres search (growing spheres, the
+  margin baselines, both BetaRCE stages and RobX's start) runs up to 1,000
+  shells, CARLA's default, on the datasets where 100 shells left it without a
+  counterfactual (`EXTENDED_GS_SEARCH` in `methods/configuration.py`). A search
+  draws the same candidates until it gives up, so runs that never reached
+  shell 100 are identical under either limit: this equals 1,000 shells
+  everywhere.
+- **Longer AP$\Delta$S budget**: one minute instead of 30 s per counterfactual
+  on the MLP datasets where AP$\Delta$S timed out (Breast Cancer, German
+  credit, HELOC, Taiwan default, Wine quality; `EXTENDED_APAS_WALL_TIME`).
 
 Wachter, RNCE, AP$\Delta$S, and T:Rex need gradients or network weights and do
 not run on XGBoost; ROAR needs a linear model.

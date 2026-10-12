@@ -9,8 +9,13 @@ from robustness_benchmark.core.classifiers import (
     XGBoostClassifier,
 )
 from robustness_benchmark.methods.configuration import (
+    EXTENDED_APAS_WALL_TIME,
+    EXTENDED_APAS_WALL_TIME_SECONDS,
     EXTENDED_GS_MAX_ITER,
+    EXTENDED_GS_SEARCH,
     GROWING_SPHERES_TARGETS,
+    GS_MAX_ITER_KEYS,
+    GS_METHODS,
     LOCKED_CONFIGS,
     TUNING_GRIDS,
     default_config,
@@ -91,44 +96,75 @@ def test_margin_variants_meet_their_threshold_at_growing_distance():
     assert mean_distances[-1] > mean_distances[0] + 1.0
 
 
-@pytest.mark.parametrize(
-    ("dataset", "model_type"),
-    [
-        ("breast_cancer", "logistic"),
-        ("breast_cancer", "mlp"),
-        ("breast_cancer", "xgboost"),
-        ("heloc", "mlp"),
-    ],
-)
-def test_every_growing_spheres_search_is_extended_where_robx_ran_out(
+@pytest.mark.parametrize(("dataset", "model_type"), sorted(EXTENDED_GS_SEARCH))
+def test_only_listed_methods_get_the_extended_growing_spheres_search(
     dataset, model_type
 ):
-    gs_limits = {
-        **{method: ("max_iter",) for method in GROWING_SPHERES_TARGETS},
-        "betarce": ("base_gs_max_iter", "gs_max_iter"),
-        "robx_balanced": ("gs_max_iter",),
-        "robx_robust": ("gs_max_iter",),
-    }
+    extended_methods = EXTENDED_GS_SEARCH[(dataset, model_type)]
+    assert extended_methods <= GS_METHODS
 
     for method, locked in LOCKED_CONFIGS.items():
         config = locked_config(method, dataset, model_type)
-        extended = gs_limits.get(method, ())
+        extended = GS_MAX_ITER_KEYS[method] if method in extended_methods else ()
         assert {key: config[key] for key in extended} == {
             key: EXTENDED_GS_MAX_ITER for key in extended
         }
-        assert {k: v for k, v in config.items() if k not in extended} == {
-            k: v for k, v in locked.items() if k not in extended
-        }
+        unchanged = {k: v for k, v in config.items() if k not in extended}
+        if method == "apas":
+            unchanged.pop("wall_time_seconds")
+            locked = {k: v for k, v in locked.items() if k != "wall_time_seconds"}
+        assert unchanged == {k: v for k, v in locked.items() if k not in extended}
     assert locked_config("robx_balanced", dataset, model_type)["max_iter"] == 100
+
+
+def test_breast_cancer_extends_every_growing_spheres_search():
+    for model_type in ("logistic", "mlp", "xgboost"):
+        assert EXTENDED_GS_SEARCH[("breast_cancer", model_type)] == GS_METHODS
+    assert GS_METHODS == {
+        *GROWING_SPHERES_TARGETS,
+        "betarce",
+        "robx_balanced",
+        "robx_robust",
+    }
 
 
 @pytest.mark.parametrize(
     ("dataset", "model_type"),
-    [("heloc", "logistic"), ("heloc", "xgboost"), ("adult", "mlp"), (None, None)],
+    [("heloc", "logistic"), ("diabetes", "mlp"), ("wine_quality", "xgboost")],
 )
-def test_other_datasets_keep_the_authors_growing_spheres_limit(dataset, model_type):
+def test_other_datasets_keep_the_authors_settings(dataset, model_type):
     for method, locked in LOCKED_CONFIGS.items():
         assert locked_config(method, dataset, model_type) == locked
+    for method, locked in LOCKED_CONFIGS.items():
+        assert locked_config(method) == locked
+
+
+def test_apas_gets_one_minute_only_where_it_timed_out():
+    for dataset, model_type in EXTENDED_APAS_WALL_TIME:
+        config = locked_config("apas", dataset, model_type)
+        assert config["wall_time_seconds"] == EXTENDED_APAS_WALL_TIME_SECONDS == 60.0
+    for dataset in ("adult", "diabetes"):
+        assert locked_config("apas", dataset, "mlp") == LOCKED_CONFIGS["apas"]
+    assert LOCKED_CONFIGS["apas"]["wall_time_seconds"] == 30.0
+
+
+def test_a_run_that_never_reaches_the_authors_limit_is_unchanged():
+    model, X, y = trained(LogisticClassifier)
+    factuals = X[model.predict(X).iloc[:, 0].to_numpy() < 0.5].iloc[:10]
+    task = make_task(model, X, y, seed=0)
+
+    authors, authors_rows = generate_counterfactuals(
+        "gs_margin_90", task, factuals, method_config=LOCKED_CONFIGS["gs_margin_90"]
+    )
+    extended, _ = generate_counterfactuals(
+        "gs_margin_90",
+        task,
+        factuals,
+        method_config={**LOCKED_CONFIGS["gs_margin_90"], "max_iter": 1_000},
+    )
+
+    assert [row["generation_status"] for row in authors_rows] == ["success"] * 10
+    pd.testing.assert_frame_equal(authors, extended)
 
 
 def test_extended_search_reaches_a_boundary_the_authors_limit_cannot():
